@@ -1,0 +1,58 @@
+version: '3.9'
+
+# USO: docker compose -f docker-compose.dev.yml up -d
+# Levanta PostgreSQL + API en Docker. Web corre con: cd web && npm run dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: flotatrack_db_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: flotatrack
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    networks:
+      - flotatrack_net
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d flotatrack']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: flotatrack_api_dev
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/flotatrack
+      JWT_SECRET: dev-secret-change-in-production
+      JWT_EXPIRES_IN: 7d
+      PORT: 3001
+      CLIENT_URL: http://localhost:5173
+      SMTP_HOST: ""
+      SMTP_PORT: "587"
+      SMTP_USER: ""
+      SMTP_PASS: ""
+      EMAIL_FROM: "FlotaTrack <noreply@flotatrack.pe>"
+    ports:
+      - '3002:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - flotatrack_net
+
+networks:
+  flotatrack_net:
+    driver: bridge
+
+volumes:
+  postgres_dev_data:

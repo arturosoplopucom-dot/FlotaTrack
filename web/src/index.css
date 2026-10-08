@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@media print {
+  /* Ocultar navegación y controles */
+  nav, aside, header, .no-print, [data-no-print] { display: none !important; }
+  /* Fondo oscuro → blanco para impresión */
+  body, html { background: #fff !important; color: #111 !important; }
+  /* Tabla ocupa todo el ancho */
+  main, .print-content { width: 100% !important; max-width: 100% !important; padding: 0 !important; }
+  table { width: 100% !important; font-size: 10px !important; border-collapse: collapse !important; }
+  th, td { border: 1px solid #ccc !important; padding: 4px 6px !important; color: #111 !important; background: #fff !important; }
+  th { background: #f3f4f6 !important; font-weight: 700 !important; }
+  /* Evitar cortes dentro de filas */
+  tr { page-break-inside: avoid; }
+  /* Título */
+  h1 { font-size: 16px !important; color: #111 !important; margin-bottom: 8px !important; }
+  p { color: #555 !important; font-size: 11px !important; }
+  /* Ocultar skeleton y estados vacíos si no hay datos */
+  .animate-pulse { display: none !important; }
+}

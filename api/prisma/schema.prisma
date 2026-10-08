@@ -1,0 +1,482 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id                  String               @id @default(cuid())
+  name                String
+  ruc                 String               @unique
+  phone               String?
+  email               String?
+  address             String?
+  logoUrl             String?
+  plan                Plan                 @default(STARTER)
+  active              Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  smtpConfig          Json?
+  sunatConfig         Json?
+  clients             Client[]
+  equipment           Equipment[]
+  invoices            Invoice[]
+  maintenancePlans    MaintenancePlan[]
+  maintenanceRecords  MaintenanceRecord[]
+  maintenanceSessions MaintenanceSession[]
+  operators           Operator[]
+  quotes              Quote[]
+  users               User[]
+  workOrders          WorkOrder[]
+
+  @@map("companies")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  email     String
+  password  String
+  role      UserRole @default(ADMIN)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  company   Company  @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, email])
+  @@map("users")
+}
+
+model Client {
+  id            String      @id @default(cuid())
+  companyId     String
+  businessName  String
+  ruc           String
+  contactName   String?
+  phone         String?
+  whatsapp      String?
+  email         String?
+  address       String?
+  creditDays    Int         @default(30)
+  active        Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  detraccionPct Decimal     @default(0) @db.Decimal(5, 2)
+  company       Company     @relation(fields: [companyId], references: [id])
+  invoices      Invoice[]
+  quotes        Quote[]
+  workOrders    WorkOrder[]
+
+  @@unique([companyId, ruc])
+  @@map("clients")
+}
+
+model Invoice {
+  id             String         @id @default(cuid())
+  companyId      String
+  clientId       String
+  number         String
+  series         String         @default("F001")
+  description    String?
+  amount         Decimal        @db.Decimal(12, 2)
+  igv            Decimal        @default(0) @db.Decimal(12, 2)
+  total          Decimal        @db.Decimal(12, 2)
+  issueDate      DateTime
+  dueDate        DateTime
+  status         InvoiceStatus  @default(PENDING)
+  currency       Currency       @default(PEN)
+  notes          String?
+  alert30Sent    Boolean        @default(false)
+  alert7Sent     Boolean        @default(false)
+  alert0Sent     Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  detraccion     Decimal        @default(0) @db.Decimal(12, 2)
+  cuentaBN       String?        @default("")
+  detraccionCode String?        @default("")
+  cuotas         InvoiceCuota[]
+  client         Client         @relation(fields: [clientId], references: [id])
+  company        Company        @relation(fields: [companyId], references: [id])
+  payments       Payment[]
+  workOrders     WorkOrder[]
+
+  @@unique([companyId, series, number])
+  @@index([companyId, status])
+  @@index([companyId, dueDate])
+  @@map("invoices")
+}
+
+model Equipment {
+  id                    String               @id @default(cuid())
+  companyId             String
+  name                  String
+  brand                 String?
+  model                 String?
+  serialNumber          String?
+  type                  EquipmentType        @default(CRANE)
+  capacity              String?
+  hourlyRate            Decimal              @default(0) @db.Decimal(12, 2)
+  dailyRate             Decimal              @default(0) @db.Decimal(12, 2)
+  currency              Currency             @default(PEN)
+  status                EquipmentStatus      @default(AVAILABLE)
+  notes                 String?
+  active                Boolean              @default(true)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  currentHours          Decimal              @default(0) @db.Decimal(10, 1)
+  maintenanceIntervalKm Decimal?             @db.Decimal(12, 1)
+  nextMaintenanceKm     Decimal?             @db.Decimal(12, 1)
+  odometerKm            Decimal?             @db.Decimal(12, 1)
+  company               Company              @relation(fields: [companyId], references: [id])
+  maintenancePlans      MaintenancePlan[]
+  maintenanceRecords    MaintenanceRecord[]
+  maintenanceSessions   MaintenanceSession[]
+  odometerLogs          OdometerLog[]
+  quotes                Quote[]
+  workOrders            WorkOrder[]
+
+  @@index([companyId, status])
+  @@map("equipment")
+}
+
+model OdometerLog {
+  id          String    @id @default(cuid())
+  equipmentId String
+  companyId   String
+  km          Decimal   @db.Decimal(12, 1)
+  notes       String?
+  recordedAt  DateTime  @default(now())
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+
+  @@index([equipmentId, recordedAt(sort: Desc)])
+  @@map("odometer_logs")
+}
+
+model Operator {
+  id            String         @id @default(cuid())
+  companyId     String
+  name          String
+  dni           String
+  licenseNumber String?
+  licenseExpiry DateTime?
+  phone         String?
+  status        OperatorStatus @default(ACTIVE)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  company       Company        @relation(fields: [companyId], references: [id])
+  workOrders    WorkOrder[]
+
+  @@unique([companyId, dni])
+  @@map("operators")
+}
+
+model WorkOrder {
+  id          String          @id @default(cuid())
+  companyId   String
+  number      String
+  clientId    String
+  equipmentId String
+  operatorId  String
+  location    String?
+  description String?
+  startDate   DateTime
+  endDate     DateTime?
+  billingType BillingType     @default(HOURLY)
+  quantity    Decimal         @default(0) @db.Decimal(10, 2)
+  unitRate    Decimal         @default(0) @db.Decimal(12, 2)
+  subtotal    Decimal         @default(0) @db.Decimal(12, 2)
+  status      WorkOrderStatus @default(DRAFT)
+  invoiceId   String?
+  notes       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  quote       Quote?
+  costs       WorkOrderCost[]
+  client      Client          @relation(fields: [clientId], references: [id])
+  company     Company         @relation(fields: [companyId], references: [id])
+  equipment   Equipment       @relation(fields: [equipmentId], references: [id])
+  invoice     Invoice?        @relation(fields: [invoiceId], references: [id])
+  operator    Operator        @relation(fields: [operatorId], references: [id])
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@map("work_orders")
+}
+
+model WorkOrderCost {
+  id          String       @id @default(cuid())
+  workOrderId String
+  category    CostCategory @default(OTHER)
+  description String?
+  amount      Decimal      @db.Decimal(12, 2)
+  createdAt   DateTime     @default(now())
+  workOrder   WorkOrder    @relation(fields: [workOrderId], references: [id])
+
+  @@map("work_order_costs")
+}
+
+model MaintenancePlan {
+  id               String               @id @default(cuid())
+  companyId        String
+  equipmentId      String
+  name             String
+  description      String?
+  intervalType     MaintenanceInterval  @default(DATE)
+  intervalDays     Int?
+  intervalHours    Decimal?             @db.Decimal(10, 1)
+  intervalKm       Decimal?             @db.Decimal(12, 1)
+  lastServiceAt    DateTime?
+  lastServiceHours Decimal?             @db.Decimal(10, 1)
+  lastServiceKm    Decimal?             @db.Decimal(12, 1)
+  nextDueAt        DateTime?
+  nextDueHours     Decimal?             @db.Decimal(10, 1)
+  nextDueKm        Decimal?             @db.Decimal(12, 1)
+  active           Boolean              @default(true)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  company          Company              @relation(fields: [companyId], references: [id])
+  equipment        Equipment            @relation(fields: [equipmentId], references: [id])
+  records          MaintenanceRecord[]
+  sessions         MaintenanceSession[]
+
+  @@index([companyId, equipmentId])
+  @@map("maintenance_plans")
+}
+
+model MaintenanceRecord {
+  id             String              @id @default(cuid())
+  companyId      String
+  equipmentId    String
+  planId         String?
+  performedAt    DateTime
+  hoursAtService Decimal?            @db.Decimal(10, 1)
+  technician     String?
+  description    String?
+  cost           Decimal             @default(0) @db.Decimal(12, 2)
+  notes          String?
+  createdAt      DateTime            @default(now())
+  sessionId      String?
+  company        Company             @relation(fields: [companyId], references: [id])
+  equipment      Equipment           @relation(fields: [equipmentId], references: [id])
+  plan           MaintenancePlan?    @relation(fields: [planId], references: [id])
+  session        MaintenanceSession? @relation(fields: [sessionId], references: [id])
+
+  @@index([companyId, equipmentId])
+  @@map("maintenance_records")
+}
+
+model MaintenanceSession {
+  id                String                   @id @default(cuid())
+  companyId         String
+  equipmentId       String
+  planId            String?
+  status            MaintenanceSessionStatus @default(IN_PROGRESS)
+  startedAt         DateTime
+  estimatedEnd      DateTime?
+  technician        String?
+  workDescription   String?
+  estimatedCost     Decimal?                 @db.Decimal(12, 2)
+  completedAt       DateTime?
+  hoursAtClose      Decimal?                 @db.Decimal(10, 1)
+  actualCost        Decimal?                 @db.Decimal(12, 2)
+  completionNotes   String?
+  odometerKmAtClose Decimal?                 @db.Decimal(12, 1)
+  nextMaintenanceKm Decimal?                 @db.Decimal(12, 1)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  record          MaintenanceRecord[]
+  company         Company                  @relation(fields: [companyId], references: [id])
+  equipment       Equipment                @relation(fields: [equipmentId], references: [id])
+  plan            MaintenancePlan?         @relation(fields: [planId], references: [id])
+
+  @@index([companyId, status])
+  @@index([companyId, equipmentId, status])
+  @@map("maintenance_sessions")
+}
+
+model Quote {
+  id                     String      @id @default(cuid())
+  companyId              String
+  number                 String
+  clientId               String
+  equipmentId            String?
+  status                 QuoteStatus @default(DRAFT)
+  issueDate              DateTime    @default(now())
+  validUntil             DateTime
+  subtotal               Decimal     @default(0) @db.Decimal(12, 2)
+  igv                    Decimal     @default(0) @db.Decimal(12, 2)
+  total                  Decimal     @default(0) @db.Decimal(12, 2)
+  currency               Currency    @default(PEN)
+  notes                  String?
+  convertedToWorkOrderId String?     @unique
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  rejectionNotes         String?
+  items                  QuoteItem[]
+  client                 Client      @relation(fields: [clientId], references: [id])
+  company                Company     @relation(fields: [companyId], references: [id])
+  workOrder              WorkOrder?  @relation(fields: [convertedToWorkOrderId], references: [id])
+  equipment              Equipment?  @relation(fields: [equipmentId], references: [id])
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@map("quotes")
+}
+
+model QuoteItem {
+  id          String  @id @default(cuid())
+  quoteId     String
+  description String
+  quantity    Decimal @default(1) @db.Decimal(10, 3)
+  unitPrice   Decimal @default(0) @db.Decimal(12, 2)
+  total       Decimal @default(0) @db.Decimal(12, 2)
+  order       Int     @default(0)
+  quote       Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@map("quote_items")
+}
+
+model InvoiceCuota {
+  id          String      @id @default(cuid())
+  invoiceId   String
+  number      Int
+  dueDate     DateTime
+  amount      Decimal     @db.Decimal(12, 2)
+  status      CuotaStatus @default(PENDING)
+  paidAt      DateTime?
+  alert30Sent Boolean     @default(false)
+  alert7Sent  Boolean     @default(false)
+  alert0Sent  Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  invoice     Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment     Payment?
+
+  @@unique([invoiceId, number])
+  @@index([invoiceId])
+  @@index([status, dueDate])
+  @@map("invoice_cuotas")
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String
+  amount    Decimal       @db.Decimal(12, 2)
+  method    PaymentMethod @default(TRANSFER)
+  reference String?
+  paidAt    DateTime      @default(now())
+  notes     String?
+  createdAt DateTime      @default(now())
+  cuotaId   String?       @unique
+  cuota     InvoiceCuota? @relation(fields: [cuotaId], references: [id])
+  invoice   Invoice       @relation(fields: [invoiceId], references: [id])
+
+  @@map("payments")
+}
+
+enum Plan {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum InvoiceStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum Currency {
+  PEN
+  USD
+}
+
+enum EquipmentType {
+  CRANE
+  PLATFORM
+  FORKLIFT
+  EXCAVATOR
+  OTHER
+}
+
+enum EquipmentStatus {
+  AVAILABLE
+  IN_USE
+  MAINTENANCE
+  RETIRED
+}
+
+enum OperatorStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum BillingType {
+  HOURLY
+  DAILY
+  FIXED
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  BILLED
+  SENT
+  ACCEPTED
+  PAID
+  CANCELLED
+}
+
+enum CostCategory {
+  FUEL
+  TOLL
+  ALLOWANCE
+  MAINTENANCE
+  OTHER
+}
+
+enum MaintenanceSessionStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum MaintenanceInterval {
+  DATE
+  HOURS
+  BOTH
+  KM
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  CONVERTED
+}
+
+enum CuotaStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+enum PaymentMethod {
+  CASH
+  TRANSFER
+  CHECK
+  DEPOSIT
+}
