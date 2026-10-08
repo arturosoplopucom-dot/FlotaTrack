@@ -8,7 +8,26 @@ Controla toda la operación: desde la cotización hasta el cobro, con reportes e
 
 ## Capturas de pantalla
 
-> Dashboard · Cobranza · Órdenes de Trabajo · Reportes
+### Dashboard — KPIs y control de flota en tiempo real
+![Dashboard](docs/screenshots/01-dashboard.jpg)
+
+### Cobranza (CxC) — Facturas con detracción SUNAT, envío por WhatsApp y email
+![Cobranza](docs/screenshots/02-cobranza.jpg)
+
+### Órdenes de Trabajo — Ciclo completo con PDF y seguimiento de estado
+![Órdenes de Trabajo](docs/screenshots/03-ordenes-trabajo.jpg)
+
+### Cotizaciones — Generación de propuestas con PDF descargable
+![Cotizaciones](docs/screenshots/04-cotizaciones.jpg)
+
+### Equipos — Gestión de flota de maquinaria pesada
+![Equipos](docs/screenshots/07-equipos.jpg)
+
+### Antigüedad de Cartera — Aging report con alertas automáticas
+![Antigüedad CxC](docs/screenshots/06-antiguedad.jpg)
+
+### Centro de Reportes — 11 reportes exportables a Excel y PDF
+![Reportes](docs/screenshots/05-reportes.jpg)
 
 ---
 
