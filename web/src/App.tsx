@@ -27,6 +27,7 @@ import PaymentsReportPage from './pages/PaymentsReportPage'
 import EquipmentProfitabilityPage from './pages/EquipmentProfitabilityPage'
 import EquipmentAvailabilityPage from './pages/EquipmentAvailabilityPage'
 import SunatSyncPage from './pages/SunatSyncPage'
+import ServiceReportsPage from './pages/ServiceReportsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/profile"  element={<PrivateRoute><CompanyProfilePage /></PrivateRoute>} />
           <Route path="/equipment" element={<PrivateRoute><EquipmentPage /></PrivateRoute>} />
           <Route path="/operators" element={<PrivateRoute><OperatorsPage /></PrivateRoute>} />
+          <Route path="/service-reports" element={<PrivateRoute><ServiceReportsPage /></PrivateRoute>} />
           <Route path="/workorders" element={<PrivateRoute><WorkOrdersPage /></PrivateRoute>} />
           <Route path="/quotes"       element={<PrivateRoute><QuotesPage /></PrivateRoute>} />
           <Route path="/maintenance"  element={<PrivateRoute><MaintenancePage /></PrivateRoute>} />

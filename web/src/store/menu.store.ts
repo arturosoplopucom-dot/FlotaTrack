@@ -8,18 +8,19 @@ export type NavMeta = {
 }
 
 export const NAV_META: NavMeta[] = [
-  { key: 'dashboard',   label: 'Dashboard',          section: 'GENERAL',     locked: true },
-  { key: 'equipment',   label: 'Equipos',             section: 'OPERACIONES' },
-  { key: 'quotes',      label: 'Cotizaciones',        section: 'OPERACIONES' },
-  { key: 'operators',   label: 'Operarios',           section: 'OPERACIONES' },
-  { key: 'maintenance', label: 'Mantenimiento',       section: 'OPERACIONES' },
-  { key: 'workorders',  label: 'Órdenes de Trabajo',  section: 'OPERACIONES' },
-  { key: 'clients',     label: 'Clientes',            section: 'COMERCIAL'   },
-  { key: 'cxc',         label: 'Cobranza',            section: 'COMERCIAL'   },
-  { key: 'aging',       label: 'Antigüedad CxC',      section: 'COMERCIAL'   },
-  { key: 'payments',    label: 'Pagos',               section: 'COMERCIAL'   },
-  { key: 'reports',     label: 'Reportes',            section: 'ANÁLISIS'    },
-  { key: 'profile',     label: 'Empresa',             section: 'SISTEMA',    locked: true },
+  { key: 'dashboard',      label: 'Dashboard',             section: 'GENERAL',     locked: true },
+  { key: 'equipment',      label: 'Equipos',               section: 'OPERACIONES' },
+  { key: 'quotes',         label: 'Cotizaciones',          section: 'OPERACIONES' },
+  { key: 'service-reports',label: 'Reportes de Servicio',  section: 'OPERACIONES' },
+  { key: 'operators',      label: 'Operarios',             section: 'OPERACIONES' },
+  { key: 'maintenance',    label: 'Mantenimiento',         section: 'OPERACIONES' },
+  { key: 'workorders',     label: 'Liquidaciones',         section: 'OPERACIONES' },
+  { key: 'clients',        label: 'Clientes',              section: 'COMERCIAL'   },
+  { key: 'cxc',            label: 'Cobranza',              section: 'COMERCIAL'   },
+  { key: 'aging',          label: 'Antigüedad CxC',        section: 'COMERCIAL'   },
+  { key: 'payments',       label: 'Pagos',                 section: 'COMERCIAL'   },
+  { key: 'reports',        label: 'Reportes',              section: 'ANÁLISIS'    },
+  { key: 'profile',        label: 'Empresa',               section: 'SISTEMA',    locked: true },
 ]
 
 export const NAV_SECTIONS = ['GENERAL', 'OPERACIONES', 'COMERCIAL', 'ANÁLISIS', 'SISTEMA'] as const
@@ -44,7 +45,18 @@ function buildDefaultOrder(): Record<string, string[]> {
 function loadOrder(): Record<string, string[]> {
   try {
     const raw = localStorage.getItem('ft_menu_order')
-    return raw ? JSON.parse(raw) : buildDefaultOrder()
+    if (!raw) return buildDefaultOrder()
+    const saved: Record<string, string[]> = JSON.parse(raw)
+    const defaults = buildDefaultOrder()
+    // Merge any new keys that aren't in the saved order yet
+    const merged: Record<string, string[]> = {}
+    for (const section of NAV_SECTIONS) {
+      const savedKeys = saved[section] ?? []
+      const defaultKeys = defaults[section] ?? []
+      const extra = defaultKeys.filter((k) => !savedKeys.includes(k))
+      merged[section] = [...savedKeys, ...extra]
+    }
+    return merged
   } catch {
     return buildDefaultOrder()
   }
