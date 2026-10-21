@@ -15,7 +15,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'operators',   label: 'Operarios',    path: '/operators',   icon: Users           },
   { key: 'quotes',      label: 'Cotizaciones', path: '/quotes',      icon: FileText        },
   { key: 'maintenance', label: 'Mantenimiento',path: '/maintenance', icon: Wrench          },
-  { key: 'workorders',  label: 'OT',           path: '/workorders',  icon: ClipboardList   },
+  { key: 'workorders',  label: 'Liquidaciones', path: '/workorders',  icon: ClipboardList   },
   { key: 'reports',     label: 'Rentabilidad', path: '/reports',     icon: BarChart2       },
   { key: 'profile',     label: 'Empresa',      path: '/profile',     icon: Settings        },
 ]

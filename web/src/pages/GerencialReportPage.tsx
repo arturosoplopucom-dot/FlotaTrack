@@ -1,16 +1,18 @@
-﻿import { useState } from 'react'
+﻿import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   TrendingUp, TrendingDown, DollarSign, Truck,
   Users, BarChart2, PieChart, ArrowUpRight, ChevronLeft, FileText, Loader2,
 } from 'lucide-react'
-import { useProfitability, type ReportPeriod } from '../hooks/useReports'
+import { useProfitability, useInvoicesReport, type ReportPeriod } from '../hooks/useReports'
 import { exportGerencialPDF } from '../utils/exportUtils'
 import AppShell from '../components/AppShell'
 
-const fmt   = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtK  = (n: number) => n >= 1000 ? `S/ ${(n / 1000).toFixed(1)}k` : fmt(n)
-const fmtPct= (n: number) => `${n.toFixed(1)}%`
+const fmt    = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtUsd = (n: number) => '$ '  + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtK   = (n: number) => n >= 1000 ? `S/ ${(n / 1000).toFixed(1)}k` : fmt(n)
+const fmtUsdK= (n: number) => n >= 1000 ? `$ ${(n / 1000).toFixed(1)}k` : fmtUsd(n)
+const fmtPct = (n: number) => `${n.toFixed(1)}%`
 
 const CATEGORY_LABEL: Record<string, string> = {
   FUEL: 'Combustible', TOLL: 'Peajes', ALLOWANCE: 'Viáticos', MAINTENANCE: 'Mantenimiento', OTHER: 'Otros',
@@ -146,6 +148,19 @@ export default function GerencialReportPage() {
   const [exporting, setExporting] = useState(false)
   const { data, isLoading } = useProfitability(period)
   const s = data?.summary
+
+  // Fecha inicio del período seleccionado (para alinear totales USD con el mismo período)
+  const periodDateFrom = useMemo(() => {
+    if (period === 'all') return undefined
+    const d = new Date()
+    const days: Record<ReportPeriod, number> = { '1m': 30, '3m': 90, '6m': 180, '1y': 365, all: 0 }
+    d.setDate(d.getDate() - (days[period] ?? 30))
+    return d.toISOString().split('T')[0]
+  }, [period])
+
+  // Fuente única para los tres cards financieros → garantiza Facturado = Cobrado + Por cobrar
+  const { data: invSummaryData } = useInvoicesReport({ dateFrom: periodDateFrom })
+  const inv = invSummaryData?.summary
   const maxClientRev = Math.max(...(data?.byClient.map((c) => c.revenue) ?? [1]), 1)
   const maxEquipRev  = Math.max(...(data?.byEquipment.map((e) => e.revenue) ?? [1]), 1)
   const chartData    = (data?.byMonth ?? []).map((m) => ({ label: m.month, revenue: m.revenue, costs: m.costs }))
@@ -209,16 +224,43 @@ export default function GerencialReportPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-              <KPICard label="Ingresos operativos"    value={fmtK(s?.totalRevenue ?? 0)}   icon={TrendingUp}   color="blue"   />
+              <KPICard label="Ingresos operativos"
+                value={(s?.totalRevenuePen ?? 0) > 0 && (s?.totalRevenueUsd ?? 0) > 0
+                  ? fmtK(s?.totalRevenuePen ?? 0)
+                  : (s?.totalRevenueUsd ?? 0) > 0 ? fmtUsdK(s?.totalRevenueUsd ?? 0) : fmtK(s?.totalRevenuePen ?? 0)}
+                sub={(s?.totalRevenuePen ?? 0) > 0 && (s?.totalRevenueUsd ?? 0) > 0
+                  ? `+ ${fmtUsdK(s?.totalRevenueUsd ?? 0)}` : undefined}
+                icon={TrendingUp} color="blue" />
               <KPICard label="Costos totales"          value={fmtK(s?.totalCosts ?? 0)}     icon={TrendingDown} color="red"    />
-              <KPICard label="Margen bruto"            value={fmtK(s?.grossMargin ?? 0)}    sub={`${fmtPct(s?.marginPct ?? 0)} del total`}
-                positive={(s?.marginPct ?? 0) >= 20}  icon={ArrowUpRight}                  color={(s?.marginPct ?? 0) >= 20 ? 'green' : 'yellow'} />
+              <KPICard label="Margen bruto"
+                value={(s?.totalRevenuePen ?? 0) > 0 && (s?.totalRevenueUsd ?? 0) > 0
+                  ? fmtK(s?.grossMargin ?? 0)
+                  : (s?.totalRevenueUsd ?? 0) > 0 ? fmtUsdK(s?.grossMargin ?? 0) : fmtK(s?.grossMargin ?? 0)}
+                sub={`${fmtPct(s?.marginPct ?? 0)} del total`}
+                positive={(s?.marginPct ?? 0) >= 20}  icon={ArrowUpRight} color={(s?.marginPct ?? 0) >= 20 ? 'green' : 'yellow'} />
               <KPICard label="Costo de mantenimiento" value={fmtK(s?.totalMaintCost ?? 0)} icon={Truck}        color="purple" />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-              <KPICard label="Total facturado" value={fmtK(s?.totalInvoiced ?? 0)}     icon={DollarSign} color="blue"   note="Valor bruto incl. detracción" />
-              <KPICard label="Total cobrado"   value={fmtK(s?.totalCollected ?? 0)}    icon={DollarSign} color="green"  note="Efectivo recibido sin detracción" />
-              <KPICard label="Por cobrar"      value={fmtK(s?.pendingCollection ?? 0)} icon={DollarSign} color="yellow" note="Saldo neto sin detracción" />
+              {/* ── Cards duales PEN + USD ───────────────────────────────── */}
+              {[
+                { label: 'Total facturado', pen: inv?.totalInvoiced ?? 0,    usdV: inv?.totalInvoicedUsd ?? 0, note: 'Incl. detracción', color: 'var(--clr-primary)' },
+                { label: 'Total cobrado',   pen: inv?.totalPaid ?? 0,        usdV: inv?.totalPaidUsd ?? 0,     note: 'Cobrado en facturas del período', color: 'var(--clr-success)' },
+                { label: 'Por cobrar',      pen: inv?.totalPending ?? 0,     usdV: inv?.totalPendingUsd ?? 0,  note: 'Saldo neto',       color: '#d97706' },
+              ].map(({ label, pen, usdV, note, color }) => (
+                <div key={label} style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{label}</span>
+                    <div style={{ padding: 6, borderRadius: 8, background: `${color}1a` }}>
+                      <DollarSign size={14} style={{ color, display: 'block' }} />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--clr-text)', fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{fmtK(pen)}</div>
+                  {usdV > 0 && (
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#2563eb', fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>{fmtUsdK(usdV)}</div>
+                  )}
+                  <div style={{ fontSize: 10, marginTop: 5, color: 'var(--clr-text-subtle)' }}>{note}</div>
+                </div>
+              ))}
               <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: 16 }}>
                 <p style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginBottom: 12 }}>OTs en el período</p>
                 <div style={{ display: 'flex', gap: 20 }}>
@@ -267,7 +309,7 @@ export default function GerencialReportPage() {
                           <span style={{ fontSize: 12, color: 'var(--clr-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{i + 1}. {e.name}</span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                             {e.hours > 0 && <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{e.hours.toFixed(0)}h</span>}
-                            <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{e.otCount} OT</span>
+                            <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{e.otCount} Liq.</span>
                             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-text)', width: 72, textAlign: 'right' }}>{fmtK(e.revenue)}</span>
                           </div>
                         </div>
@@ -279,12 +321,12 @@ export default function GerencialReportPage() {
               </Panel>
             </div>
             {(data?.topOTs ?? []).length > 0 && (
-              <Panel title="Top OTs por margen bruto" icon={ArrowUpRight} iconColor="var(--clr-success)">
+              <Panel title="Top Liquidaciones por margen bruto" icon={ArrowUpRight} iconColor="var(--clr-success)">
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ borderBottom: '1px solid var(--clr-border)' }}>
-                        {['OT', 'Cliente', 'Equipo', 'Ingresos', 'Costos', 'Margen', '%'].map((h, i) => (
+                        {['Liquidación', 'Cliente', 'Equipo', 'Ingresos', 'Costos', 'Margen', '%'].map((h, i) => (
                           <th key={h} style={{ paddingBottom: 8, fontWeight: 500, color: 'var(--clr-text-subtle)', fontSize: 11, textAlign: i >= 3 ? 'right' : 'left' }}>{h}</th>
                         ))}
                       </tr>
@@ -295,9 +337,9 @@ export default function GerencialReportPage() {
                           <td style={{ padding: '8px 0', fontFamily: 'monospace', color: 'var(--clr-primary)' }}>{ot.number}</td>
                           <td style={{ padding: '8px 8px 8px 0', color: 'var(--clr-text-muted)', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ot.clientName}</td>
                           <td style={{ padding: '8px 8px 8px 0', color: 'var(--clr-text-subtle)', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ot.equipmentName}</td>
-                          <td style={{ padding: '8px 0', textAlign: 'right', color: 'var(--clr-text)' }}>{fmtK(ot.revenue)}</td>
-                          <td style={{ padding: '8px 0', textAlign: 'right', color: 'var(--clr-danger)' }}>{fmtK(ot.costs)}</td>
-                          <td style={{ padding: '8px 0', textAlign: 'right', fontWeight: 700, color: 'var(--clr-success)' }}>{fmtK(ot.margin)}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right', color: 'var(--clr-text)' }}>{ot.currency === 'USD' ? fmtUsdK(ot.revenue) : fmtK(ot.revenue)}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right', color: 'var(--clr-danger)' }}>{ot.currency === 'USD' ? fmtUsdK(ot.costs) : fmtK(ot.costs)}</td>
+                          <td style={{ padding: '8px 0', textAlign: 'right', fontWeight: 700, color: 'var(--clr-success)' }}>{ot.currency === 'USD' ? fmtUsdK(ot.margin) : fmtK(ot.margin)}</td>
                           <td style={{ padding: '8px 0', textAlign: 'right', fontWeight: 700, color: ot.marginPct >= 20 ? 'var(--clr-success)' : ot.marginPct >= 0 ? '#d97706' : 'var(--clr-danger)' }}>
                             {fmtPct(ot.marginPct)}
                           </td>

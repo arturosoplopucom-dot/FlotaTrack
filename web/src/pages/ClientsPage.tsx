@@ -4,7 +4,7 @@ import {
   Plus, Building2, Phone, Mail, CreditCard,
   Pencil, Trash2, Users, LayoutGrid, List,
   ChevronDown, X, MapPin, User, Percent, ArrowUpDown, Search,
-  Upload, Download, CheckCircle, AlertCircle, Loader2,
+  Upload, Download, CheckCircle, AlertCircle, Loader2, RefreshCw,
 } from 'lucide-react'
 import { WhatsAppIcon } from '../components/WhatsAppIcon'
 import { useClients, useCreateClient, useUpdateClient, useDeleteClient, type Client } from '../hooks/useFlota'
@@ -169,6 +169,17 @@ function ClientCard({ c, onEdit, onDelete }: { c: Client; onEdit: () => void; on
   const ini  = initials(c.businessName)
   const hasDet = Number(c.detraccionPct) > 0
   const waUrl  = c.whatsapp ? (() => { const d = c.whatsapp!.replace(/\D/g, ''); return `https://wa.me/${d.startsWith('51') && d.length >= 11 ? d : '51' + d}` })() : null
+  const qc = useQueryClient()
+  const [recalcState, setRecalcState] = useState<'idle' | 'loading' | 'done'>('idle')
+  async function handleRecalculate() {
+    setRecalcState('loading')
+    try {
+      await api.post(`/clients/${c.id}/recalculate-detraccion`)
+      setRecalcState('done')
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      setTimeout(() => setRecalcState('idle'), 2500)
+    } catch { setRecalcState('idle') }
+  }
 
   return (
     <div style={{ background: 'var(--clr-sidebar)', border: '1px solid var(--clr-border)', borderRadius: 12, padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, transition: 'border-color 0.15s' }}
@@ -239,6 +250,16 @@ function ClientCard({ c, onEdit, onDelete }: { c: Client; onEdit: () => void; on
         <button onClick={onEdit} style={{ flex: 2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '6px', borderRadius: 7, background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', color: 'var(--clr-text-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
           <Pencil size={11} /> Editar
         </button>
+        {hasDet && (
+          <button
+            onClick={handleRecalculate}
+            disabled={recalcState === 'loading'}
+            title="Recalcular detracción de facturas pendientes (no cobradas)"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '6px 10px', borderRadius: 7, background: recalcState === 'done' ? 'var(--clr-success-bg)' : 'var(--clr-orange-bg)', border: `1px solid ${recalcState === 'done' ? 'var(--clr-success-border)' : 'var(--clr-orange-border)'}`, color: recalcState === 'done' ? 'var(--clr-success)' : 'var(--clr-orange)', cursor: recalcState === 'loading' ? 'default' : 'pointer', opacity: recalcState === 'loading' ? 0.6 : 1 }}
+          >
+            <RefreshCw size={11} style={recalcState === 'loading' ? { animation: 'spin 1s linear infinite' } : undefined} />
+          </button>
+        )}
         <button onClick={onDelete} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '6px 10px', borderRadius: 7, background: 'var(--clr-danger-bg)', border: '1px solid var(--clr-danger-border)', color: 'var(--clr-danger)', cursor: 'pointer' }}>
           <Trash2 size={11} />
         </button>
@@ -253,6 +274,17 @@ function ClientRow({ c, onEdit, onDelete }: { c: Client; onEdit: () => void; onD
   const ini  = initials(c.businessName)
   const hasDet = Number(c.detraccionPct) > 0
   const waUrl  = c.whatsapp ? (() => { const d = c.whatsapp!.replace(/\D/g, ''); return `https://wa.me/${d.startsWith('51') && d.length >= 11 ? d : '51' + d}` })() : null
+  const qc = useQueryClient()
+  const [recalcState, setRecalcState] = useState<'idle' | 'loading' | 'done'>('idle')
+  async function handleRecalculate() {
+    setRecalcState('loading')
+    try {
+      await api.post(`/clients/${c.id}/recalculate-detraccion`)
+      setRecalcState('done')
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      setTimeout(() => setRecalcState('idle'), 2500)
+    } catch { setRecalcState('idle') }
+  }
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 130px 100px 110px 130px', gap: 12, alignItems: 'center', padding: '11px 16px', borderBottom: '1px solid var(--clr-border)', transition: 'background 0.1s' }}
@@ -294,6 +326,16 @@ function ClientRow({ c, onEdit, onDelete }: { c: Client; onEdit: () => void; onD
         <button onClick={onEdit} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', color: 'var(--clr-text-muted)', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
           <Pencil size={10} /> Editar
         </button>
+        {hasDet && (
+          <button
+            onClick={handleRecalculate}
+            disabled={recalcState === 'loading'}
+            title="Recalcular detracción de facturas pendientes (no cobradas)"
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px', borderRadius: 6, background: recalcState === 'done' ? 'var(--clr-success-bg)' : 'var(--clr-orange-bg)', border: `1px solid ${recalcState === 'done' ? 'var(--clr-success-border)' : 'var(--clr-orange-border)'}`, color: recalcState === 'done' ? 'var(--clr-success)' : 'var(--clr-orange)', cursor: recalcState === 'loading' ? 'default' : 'pointer', opacity: recalcState === 'loading' ? 0.6 : 1 }}
+          >
+            <RefreshCw size={10} style={recalcState === 'loading' ? { animation: 'spin 1s linear infinite' } : undefined} />
+          </button>
+        )}
         <button onClick={onDelete} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '4px 8px', borderRadius: 6, background: 'var(--clr-danger-bg)', border: '1px solid var(--clr-danger-border)', color: 'var(--clr-danger)', cursor: 'pointer' }}>
           <Trash2 size={10} />
         </button>

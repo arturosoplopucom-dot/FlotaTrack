@@ -7,6 +7,11 @@ const fmtSoles = (n: number) => {
   if (n >= 1_000)     return `S/ ${(n / 1_000).toFixed(1)}k`
   return `S/ ${n.toLocaleString('es-PE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
 }
+const fmtUsd = (n: number) => {
+  if (n >= 1_000_000) return `$ ${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000)     return `$ ${(n / 1_000).toFixed(1)}k`
+  return `$ ${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+}
 
 const trendSign = (pct: number) => (pct >= 0 ? '+' : '')
 
@@ -26,10 +31,12 @@ export default function ExecutiveSummaryBar() {
   const lastMonth   = monthly.at(-1)
   const prevMonth   = monthly.at(-2)
 
-  const emitidoMes  = lastMonth?.emitido  ?? 0
-  const emitidoPrev = prevMonth?.emitido  ?? 0
-  const cobradoMes  = lastMonth?.cobrado  ?? 0
-  const cobradoPrev = prevMonth?.cobrado  ?? 0
+  const emitidoMes     = lastMonth?.emitido     ?? 0
+  const emitidoMesUsd  = lastMonth?.emitidoUsd  ?? 0
+  const emitidoPrev    = prevMonth?.emitido      ?? 0
+  const cobradoMes     = lastMonth?.cobrado      ?? 0
+  const cobradoMesUsd  = lastMonth?.cobradoUsd   ?? 0
+  const cobradoPrev    = prevMonth?.cobrado       ?? 0
 
   const emitidoTrend = emitidoPrev > 0 ? ((emitidoMes - emitidoPrev) / emitidoPrev) * 100 : null
   const cobradoTrend = cobradoPrev > 0 ? ((cobradoMes - cobradoPrev) / cobradoPrev) * 100 : null
@@ -42,6 +49,7 @@ export default function ExecutiveSummaryBar() {
       id: 'facturacion-mes',
       label: 'FACTURACIÓN DEL MES',
       value: fmtSoles(emitidoMes),
+      valueUsd: emitidoMesUsd > 0 ? fmtUsd(emitidoMesUsd) : null,
       subtext: emitidoTrend !== null
         ? `${trendSign(emitidoTrend)}${emitidoTrend.toFixed(1)}% vs mes anterior`
         : lastMonth?.mes ?? '—',
@@ -54,10 +62,11 @@ export default function ExecutiveSummaryBar() {
       id: 'cobrado-mes',
       label: 'COBRADO (MES ACTUAL)',
       value: fmtSoles(cobradoMes),
+      valueUsd: cobradoMesUsd > 0 ? fmtUsd(cobradoMesUsd) : null,
       subtext: cobradoTrend !== null
         ? `${trendSign(cobradoTrend)}${cobradoTrend.toFixed(1)}% vs mes anterior`
         : 'Período activo',
-      trendText: 'Ingresos recuperados',
+      trendText: 'Ingresado al banco · neto sin detracción',
       trendPositive: cobradoTrend === null || cobradoTrend >= 0,
       accentColor: '#10b981',
       clickable: false,
@@ -66,6 +75,7 @@ export default function ExecutiveSummaryBar() {
       id: 'overdue-ratio',
       label: '% CARTERA VENCIDA',
       value: `${overduePct.toFixed(1)}%`,
+      valueUsd: null,
       subtext: overduePct > 20 ? 'Por encima del umbral' : overduePct > 15 ? 'Atención requerida' : 'Dentro del objetivo',
       trendText: 'Meta corporativa: < 15%',
       trendPositive: overduePct <= 15,
@@ -76,6 +86,7 @@ export default function ExecutiveSummaryBar() {
       id: 'fleet-utilization',
       label: 'UTILIZACIÓN DE FLOTA',
       value: `${utilPct.toFixed(1)}%`,
+      valueUsd: null,
       subtext: `${alquilados} de ${totalEq} equipos activos`,
       trendText: utilPct >= 70 ? 'Nivel óptimo' : 'Capacidad disponible',
       trendPositive: utilPct >= 50,
@@ -124,12 +135,23 @@ export default function ExecutiveSummaryBar() {
             </div>
 
             {/* Big value */}
-            <div style={{
-              fontSize: 24, fontWeight: 700, color: 'var(--clr-text)',
-              fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em',
-              lineHeight: 1.2, marginBottom: 6,
-            }}>
-              {item.value}
+            <div style={{ marginBottom: 6 }}>
+              <div style={{
+                fontSize: 24, fontWeight: 700, color: 'var(--clr-text)',
+                fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em',
+                lineHeight: 1.2,
+              }}>
+                {item.value}
+              </div>
+              {item.valueUsd && (
+                <div style={{
+                  fontSize: 17, fontWeight: 600, color: '#2563eb',
+                  fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em',
+                  lineHeight: 1.2, marginTop: 2,
+                }}>
+                  {item.valueUsd}
+                </div>
+              )}
             </div>
 
             {/* Subtext + trend label */}

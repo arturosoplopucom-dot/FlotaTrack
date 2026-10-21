@@ -32,6 +32,12 @@ const fmtCompact = (n: number) => {
   return fmt(n)
 }
 
+const fmtCompactUsd = (n: number) => {
+  if (n >= 1_000_000) return `$ ${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `$ ${(n / 1_000).toFixed(1)}k`
+  return `$ ${n.toFixed(2)}`
+}
+
 // ─── Urgency config ───────────────────────────────────────────────────────────
 const urgencyConfig: Record<string, {
   borderColor: string; bgColor: string
@@ -327,14 +333,14 @@ export default function DashboardPage() {
           ) : dash ? (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
               <KPICard
-                data={{ id: 'cxc-vencidas',  title: 'Vencidas',         subtitle: `${dash.overdue.count} factura${dash.overdue.count !== 1 ? 's' : ''}`,  urgency: 'critical', value: dash.overdue.amount, formattedValue: fmtCompact(dash.overdue.amount), changePct: 0, trend: 'flat', colorHex: 'var(--clr-danger)' }}
+                data={{ id: 'cxc-vencidas',  title: 'Vencidas',         subtitle: `${dash.overdue.count} factura${dash.overdue.count !== 1 ? 's' : ''}`,  urgency: 'critical', value: dash.overdue.amount, formattedValue: fmtCompact(dash.overdue.amount) + ((dash.overdue.amountUsd ?? 0) > 0 ? ` + ${fmtCompactUsd(dash.overdue.amountUsd)}` : ''), changePct: 0, trend: 'flat', colorHex: 'var(--clr-danger)' }}
                 onClick={() => navigate('/aging')} />
               <KPICard
-                data={{ id: 'cxc-por-vencer',title: 'Vencen en 7 días', subtitle: `${dash.dueSoon.count} factura${dash.dueSoon.count !== 1 ? 's' : ''}`,  urgency: 'warning',  value: dash.dueSoon.amount, formattedValue: fmtCompact(dash.dueSoon.amount), changePct: 0, trend: 'flat', colorHex: '#d97706' }} />
+                data={{ id: 'cxc-por-vencer',title: 'Vencen en 7 días', subtitle: `${dash.dueSoon.count} factura${dash.dueSoon.count !== 1 ? 's' : ''}`,  urgency: 'warning',  value: dash.dueSoon.amount, formattedValue: fmtCompact(dash.dueSoon.amount) + ((dash.dueSoon.amountUsd ?? 0) > 0 ? ` + ${fmtCompactUsd(dash.dueSoon.amountUsd)}` : ''), changePct: 0, trend: 'flat', colorHex: '#d97706' }} />
               <KPICard
-                data={{ id: 'cxc-vigentes',   title: 'Vigentes',          subtitle: `${dash.current.count} factura${dash.current.count !== 1 ? 's' : ''}`,  urgency: 'info',     value: dash.current.amount, formattedValue: fmtCompact(dash.current.amount), changePct: 0, trend: 'flat', colorHex: 'var(--clr-primary)' }} />
+                data={{ id: 'cxc-vigentes',   title: 'Vigentes',          subtitle: `${dash.current.count} factura${dash.current.count !== 1 ? 's' : ''}`,  urgency: 'info',     value: dash.current.amount, formattedValue: fmtCompact(dash.current.amount) + ((dash.current.amountUsd ?? 0) > 0 ? ` + ${fmtCompactUsd(dash.current.amountUsd)}` : ''), changePct: 0, trend: 'flat', colorHex: 'var(--clr-primary)' }} />
               <KPICard
-                data={{ id: 'cxc-cobrado',    title: 'Cobrado (período)', subtitle: `${dash.paid.count} factura${dash.paid.count !== 1 ? 's' : ''}`,        urgency: 'success',  value: dash.paid.amount,    formattedValue: fmtCompact(dash.paid.amount),   changePct: 0, trend: 'flat', colorHex: 'var(--clr-success)' }} />
+                data={{ id: 'cxc-cobrado',    title: 'Facturado cobrado', subtitle: `${dash.paid.count} factura${dash.paid.count !== 1 ? 's' : ''} · valor incl. detracción`,        urgency: 'success',  value: dash.paid.amount,    formattedValue: fmtCompact(dash.paid.amount) + ((dash.paid.amountUsd ?? 0) > 0 ? ` + ${fmtCompactUsd(dash.paid.amountUsd)}` : ''),   changePct: 0, trend: 'flat', colorHex: 'var(--clr-success)' }} />
             </div>
           ) : null}
         </section>

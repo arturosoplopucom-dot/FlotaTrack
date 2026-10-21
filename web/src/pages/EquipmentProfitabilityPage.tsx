@@ -6,7 +6,8 @@ import type { ReportPeriod, EquipmentProfitabilityItem } from '../hooks/useRepor
 import AppShell from '../components/AppShell'
 import ExportMenu from '../components/ExportMenu'
 
-const fmt  = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtCur = (n: number, currency: string) =>
+  (currency === 'USD' ? '$ ' : 'S/ ') + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtP = (n: number) => n.toFixed(1) + '%'
 
 const PERIODS: { value: ReportPeriod; label: string }[] = [
@@ -30,6 +31,33 @@ const CATEGORY_LABELS: Record<string, string> = {
 const selStyle: React.CSSProperties = {
   background: 'var(--clr-surface)', color: 'var(--clr-text)', border: '1px solid var(--clr-border)',
   borderRadius: 8, padding: '7px 11px', fontSize: 12, outline: 'none', cursor: 'pointer',
+}
+
+function OTBadges({ wos }: { wos: { id: string; number: string }[] }) {
+  if (!wos || wos.length === 0) return <span style={{ color: 'var(--clr-text-subtle)', fontSize: 11 }}>—</span>
+  const visible = wos.slice(0, 2)
+  const extra   = wos.length - visible.length
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+      {visible.map((wo) => (
+        <span key={wo.id} style={{
+          fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+          background: 'var(--clr-primary-bg)', color: 'var(--clr-primary)',
+          border: '1px solid color-mix(in srgb, var(--clr-primary) 30%, transparent)',
+          whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+        }}>
+          {wo.number}
+        </span>
+      ))}
+      {extra > 0 && (
+        <span style={{
+          fontSize: 10, fontWeight: 600, padding: '2px 5px', borderRadius: 4,
+          background: 'var(--clr-surface)', color: 'var(--clr-text-subtle)',
+          border: '1px solid var(--clr-border)',
+        }}>+{extra}</span>
+      )}
+    </div>
+  )
 }
 
 function MarginBar({ pct }: { pct: number }) {
@@ -83,7 +111,7 @@ function CostBreakdown({ item }: { item: EquipmentProfitabilityItem }) {
                       {CATEGORY_LABELS[cat] ?? cat}
                     </span>
                     <span style={{ fontWeight: 600, color: 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>
-                      {fmt(amt)}
+                      {fmtCur(amt, item.currency)}
                     </span>
                   </div>
                 ))}
@@ -98,7 +126,7 @@ function CostBreakdown({ item }: { item: EquipmentProfitabilityItem }) {
                 Mantenimiento Preventivo
               </div>
               <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>
-                {fmt(item.maintCost)}
+                {fmtCur(item.maintCost, item.currency)}
               </div>
             </div>
           )}
@@ -111,15 +139,15 @@ function CostBreakdown({ item }: { item: EquipmentProfitabilityItem }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
               <div style={{ display: 'flex', gap: 16 }}>
                 <span style={{ color: 'var(--clr-text-subtle)', minWidth: 80 }}>Ingresos</span>
-                <span style={{ fontWeight: 600, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmt(item.revenue)}</span>
+                <span style={{ fontWeight: 600, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(item.revenue, item.currency)}</span>
               </div>
               <div style={{ display: 'flex', gap: 16 }}>
                 <span style={{ color: 'var(--clr-text-subtle)', minWidth: 80 }}>Costo total</span>
-                <span style={{ fontWeight: 600, color: 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmt(item.totalCost)}</span>
+                <span style={{ fontWeight: 600, color: 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(item.totalCost, item.currency)}</span>
               </div>
               <div style={{ display: 'flex', gap: 16, borderTop: '1px solid var(--clr-border)', paddingTop: 3, marginTop: 1 }}>
                 <span style={{ color: 'var(--clr-text-muted)', minWidth: 80, fontWeight: 600 }}>Margen neto</span>
-                <span style={{ fontWeight: 700, color: item.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmt(item.margin)}</span>
+                <span style={{ fontWeight: 700, color: item.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(item.margin, item.currency)}</span>
               </div>
             </div>
           </div>
@@ -165,6 +193,9 @@ export default function EquipmentProfitabilityPage() {
     )
     return { ...t, marginPct: t.revenue > 0 ? (t.margin / t.revenue) * 100 : 0 }
   }, [items])
+
+  // USD takes precedence: if any item is USD, the totals are in USD
+  const dominantCurrency = items.some((it) => it.currency === 'USD') ? 'USD' : 'PEN'
 
   const exportRows = items.map((it) => ({
     'Equipo':              it.name,
@@ -245,9 +276,9 @@ export default function EquipmentProfitabilityPage() {
         {/* KPIs — siempre visibles en ambos tabs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14, marginBottom: 24 }}>
           {[
-            { icon: DollarSign, label: 'Ingresos Totales', value: totals ? fmt(totals.revenue)   : '—', color: 'var(--clr-primary)' },
-            { icon: Wrench,     label: 'Costos Totales',   value: totals ? fmt(totals.totalCost)  : '—', color: 'var(--clr-danger)'  },
-            { icon: TrendingUp, label: 'Margen Bruto',     value: totals ? fmt(totals.margin)     : '—', color: 'var(--clr-success)' },
+            { icon: DollarSign, label: 'Ingresos Totales', value: totals ? fmtCur(totals.revenue,   dominantCurrency) : '—', color: 'var(--clr-primary)' },
+            { icon: Wrench,     label: 'Costos Totales',   value: totals ? fmtCur(totals.totalCost,  dominantCurrency) : '—', color: 'var(--clr-danger)'  },
+            { icon: TrendingUp, label: 'Margen Bruto',     value: totals ? fmtCur(totals.margin,     dominantCurrency) : '—', color: 'var(--clr-success)' },
             { icon: Hash,       label: 'Margen Promedio',  value: totals ? fmtP(totals.marginPct) : '—', color: '#d97706' },
           ].map((k) => (
             <div key={k.label} style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderLeft: `4px solid ${k.color}`, borderRadius: 8, padding: '14px 16px' }}>
@@ -293,12 +324,14 @@ export default function EquipmentProfitabilityPage() {
                         )}
                       </td>
                       <td style={{ padding: '9px 14px', color: 'var(--clr-text-muted)' }}>{TYPE_LABELS[eq.type] ?? eq.type}</td>
-                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)' }}>{eq.otCount}</td>
+                      <td style={{ padding: '9px 14px' }}>
+                        <OTBadges wos={eq.workOrders} />
+                      </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)' }}>{eq.hours > 0 ? eq.hours.toFixed(0) + 'h' : '—'}</td>
-                      <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 600, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.revenue)}</td>
-                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.opCosts)}</td>
-                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.maintCost)}</td>
-                      <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: eq.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.margin)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 600, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.revenue, eq.currency)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.opCosts, eq.currency)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.maintCost, eq.currency)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: eq.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.margin, eq.currency)}</td>
                       <td style={{ padding: '9px 14px', textAlign: 'right' }}><MarginBadge pct={eq.marginPct} /></td>
                     </tr>
                   ))}
@@ -309,10 +342,10 @@ export default function EquipmentProfitabilityPage() {
                       <td colSpan={2} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Total</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)' }}>{totals.otCount}</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)' }}>{totals.hours > 0 ? totals.hours.toFixed(0) + 'h' : '—'}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.revenue)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.opCosts)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.maintCost)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: totals.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.margin)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.revenue, dominantCurrency)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.opCosts, dominantCurrency)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.maintCost, dominantCurrency)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: totals.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.margin, dominantCurrency)}</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right' }}><MarginBadge pct={totals.marginPct} /></td>
                     </tr>
                   </tfoot>
@@ -377,12 +410,14 @@ export default function EquipmentProfitabilityPage() {
                             )}
                           </td>
                           <td style={{ padding: '9px 14px', color: 'var(--clr-text-muted)' }}>{TYPE_LABELS[eq.type] ?? eq.type}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)' }}>{eq.otCount}</td>
+                          <td style={{ padding: '9px 14px' }}>
+                            <OTBadges wos={eq.workOrders} />
+                          </td>
                           <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)' }}>{eq.hours > 0 ? eq.hours.toFixed(0) + 'h' : '—'}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 600, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.revenue)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.opCosts)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.maintCost)}</td>
-                          <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: eq.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmt(eq.margin)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 600, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.revenue, eq.currency)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.opCosts, eq.currency)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.maintCost, eq.currency)}</td>
+                          <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: eq.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(eq.margin, eq.currency)}</td>
                           <td style={{ padding: '9px 14px', textAlign: 'right' }}><MarginBadge pct={eq.marginPct} /></td>
                         </tr>
                         {isExpanded && <CostBreakdown item={eq} />}
@@ -397,10 +432,10 @@ export default function EquipmentProfitabilityPage() {
                       <td colSpan={2} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Total</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)' }}>{totals.otCount}</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)' }}>{totals.hours > 0 ? totals.hours.toFixed(0) + 'h' : '—'}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.revenue)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.opCosts)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.maintCost)}</td>
-                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: totals.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmt(totals.margin)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: 'var(--clr-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.revenue, dominantCurrency)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.opCosts, dominantCurrency)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 700, color: 'var(--clr-text-muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.maintCost, dominantCurrency)}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: totals.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', fontVariantNumeric: 'tabular-nums' }}>{fmtCur(totals.margin, dominantCurrency)}</td>
                       <td style={{ padding: '10px 14px', textAlign: 'right' }}><MarginBadge pct={totals.marginPct} /></td>
                     </tr>
                   </tfoot>

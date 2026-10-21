@@ -584,7 +584,7 @@ const fmt = (n: number) =>
 
 function EquipmentModal({ eq, onClose }: { eq?: Equipment; onClose: () => void }) {
   const { register, handleSubmit, formState: { isSubmitting } } = useForm({
-    defaultValues: eq ?? { currency: 'PEN', hourlyRate: 0, dailyRate: 0 },
+    defaultValues: eq ?? { hourlyRatePen: 0, hourlyRateUsd: 0, dailyRatePen: 0, dailyRateUsd: 0 },
   })
   const [equipType, setEquipType]     = useState(eq?.type   ?? 'CRANE')
   const [equipStatus, setEquipStatus] = useState(eq?.status ?? 'AVAILABLE')
@@ -595,6 +595,10 @@ function EquipmentModal({ eq, onClose }: { eq?: Equipment; onClose: () => void }
   const inpStyle = { background: 'var(--clr-surface)', borderColor: 'var(--clr-border)', color: 'var(--clr-text)' } as React.CSSProperties
 
   const onSubmit = async (data: any) => {
+    const hourlyRatePen = parseFloat(data.hourlyRatePen) || 0
+    const hourlyRateUsd = parseFloat(data.hourlyRateUsd) || 0
+    const dailyRatePen  = parseFloat(data.dailyRatePen)  || 0
+    const dailyRateUsd  = parseFloat(data.dailyRateUsd)  || 0
     const payload: Record<string, unknown> = {
       name:         data.name,
       brand:        data.brand  || undefined,
@@ -604,8 +608,12 @@ function EquipmentModal({ eq, onClose }: { eq?: Equipment; onClose: () => void }
       notes:        data.notes  || undefined,
       type:         equipType,
       status:       equipStatus,
-      hourlyRate:   parseFloat(data.hourlyRate) || 0,
-      dailyRate:    parseFloat(data.dailyRate)  || 0,
+      hourlyRate:   hourlyRatePen || hourlyRateUsd,
+      dailyRate:    dailyRatePen  || dailyRateUsd,
+      hourlyRatePen: hourlyRatePen || null,
+      hourlyRateUsd: hourlyRateUsd || null,
+      dailyRatePen:  dailyRatePen  || null,
+      dailyRateUsd:  dailyRateUsd  || null,
     }
     if (data.currentHours !== '' && data.currentHours != null) payload.currentHours = parseFloat(data.currentHours)
     if (data.odometerKm !== '' && data.odometerKm != null) payload.odometerKm = parseFloat(data.odometerKm)
@@ -617,7 +625,7 @@ function EquipmentModal({ eq, onClose }: { eq?: Equipment; onClose: () => void }
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="rounded-2xl p-6 w-full max-w-xl border" style={{ background: 'var(--clr-sidebar)', borderColor: 'var(--clr-border)' }}>
+      <div className="rounded-2xl p-6 w-full max-w-xl border overflow-y-auto" style={{ background: 'var(--clr-sidebar)', borderColor: 'var(--clr-border)', maxHeight: '90vh' }}>
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-lg font-bold" style={{ color: 'var(--clr-text)' }}>{eq ? 'Editar Equipo' : 'Nuevo Equipo'}</h2>
@@ -672,23 +680,35 @@ function EquipmentModal({ eq, onClose }: { eq?: Equipment; onClose: () => void }
               <input {...register('currentHours')} type="number" step="1" placeholder="0" className={inp} style={inpStyle} />
             </div>
             <div>
-              <label className="text-xs mb-1 block" style={{ color: 'var(--clr-text-subtle)' }}>Tarifa / día (S/)</label>
-              <input {...register('dailyRate')} type="number" step="0.01" className={inp} style={inpStyle} />
+              <label className="text-xs mb-1 block" style={{ color: 'var(--clr-text-subtle)' }}>Odómetro actual (km)</label>
+              <input {...register('odometerKm')} type="number" step="1" min="0" placeholder="0" className={inp} style={inpStyle} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs mb-1 block" style={{ color: 'var(--clr-text-subtle)' }}>Odómetro actual (km)</label>
-              <input {...register('odometerKm')} type="number" step="1" min="0" placeholder="0" className={inp} style={inpStyle} />
-            </div>
-            <div>
               <label className="text-xs mb-1 block" style={{ color: 'var(--clr-text-subtle)' }}>Intervalo mant. (km)</label>
               <input {...register('maintenanceIntervalKm')} type="number" step="1" min="0" placeholder="5000" className={inp} style={inpStyle} />
             </div>
+            <div />
           </div>
-          <div>
-            <label className="text-xs mb-1 block" style={{ color: 'var(--clr-text-subtle)' }}>Tarifa / hora (S/)</label>
-            <input {...register('hourlyRate')} type="number" step="0.01" className={inp} style={inpStyle} />
+          {/* Tarifas duales PEN / USD */}
+          <div style={{ border: '1px solid var(--clr-border)', borderRadius: 10, padding: '12px 14px', background: 'var(--clr-surface)' }}>
+            <div className="text-xs font-semibold mb-3" style={{ color: 'var(--clr-text-muted)' }}>Tarifas</div>
+            <div className="grid grid-cols-3 gap-2 mb-1">
+              <div />
+              <div className="text-center text-xs font-bold" style={{ color: '#16a34a' }}>S/ Soles</div>
+              <div className="text-center text-xs font-bold" style={{ color: '#1d4ed8' }}>$ Dólares</div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-2 items-center">
+              <div className="text-xs" style={{ color: 'var(--clr-text-subtle)' }}>Por hora</div>
+              <input {...register('hourlyRatePen')} type="number" step="0.01" placeholder="0.00" className={inp} style={{ ...inpStyle, textAlign: 'right' }} />
+              <input {...register('hourlyRateUsd')} type="number" step="0.01" placeholder="0.00" className={inp} style={{ ...inpStyle, textAlign: 'right' }} />
+            </div>
+            <div className="grid grid-cols-3 gap-2 items-center">
+              <div className="text-xs" style={{ color: 'var(--clr-text-subtle)' }}>Por día</div>
+              <input {...register('dailyRatePen')}  type="number" step="0.01" placeholder="0.00" className={inp} style={{ ...inpStyle, textAlign: 'right' }} />
+              <input {...register('dailyRateUsd')}  type="number" step="0.01" placeholder="0.00" className={inp} style={{ ...inpStyle, textAlign: 'right' }} />
+            </div>
           </div>
           <div>
             <label className="text-xs mb-1 block" style={{ color: 'var(--clr-text-subtle)' }}>Notas / Ubicación actual</label>
@@ -755,7 +775,7 @@ function OTPreviewModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void })
             </div>
             <div style={{ background: 'var(--clr-sidebar)', borderRadius: 10, padding: '10px 14px' }}>
               <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 4 }}><User size={10} /> Operario</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--clr-text)' }}>{wo.operator.name}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--clr-text)' }}>{wo.operator?.name ?? '—'}</div>
             </div>
           </div>
 
@@ -1159,7 +1179,10 @@ export default function EquipmentPage() {
                     <div>
                       <div className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--clr-text-subtle)' }}>Tarifa/día</div>
                       <div className="text-sm font-bold" style={{ color: 'var(--clr-text)' }}>
-                        {fmt(Number(eq.dailyRate))}
+                        {eq.dailyRatePen && Number(eq.dailyRatePen) > 0 ? <span style={{ color: '#16a34a' }}>S/{Number(eq.dailyRatePen).toLocaleString('es-PE', { minimumFractionDigits: 0 })}</span> : null}
+                        {eq.dailyRatePen && Number(eq.dailyRatePen) > 0 && eq.dailyRateUsd && Number(eq.dailyRateUsd) > 0 ? <span style={{ color: 'var(--clr-text-subtle)', margin: '0 3px' }}>·</span> : null}
+                        {eq.dailyRateUsd && Number(eq.dailyRateUsd) > 0 ? <span style={{ color: '#1d4ed8' }}>${Number(eq.dailyRateUsd).toLocaleString('es-PE', { minimumFractionDigits: 0 })}</span> : null}
+                        {(!eq.dailyRatePen || Number(eq.dailyRatePen) === 0) && (!eq.dailyRateUsd || Number(eq.dailyRateUsd) === 0) ? fmt(Number(eq.dailyRate)) : null}
                       </div>
                     </div>
                     <div>
@@ -1235,15 +1258,15 @@ export default function EquipmentPage() {
                           className="px-3 py-2 rounded-lg text-xs font-semibold ml-auto"
                           style={{ background: 'var(--clr-primary-bg)', color: 'var(--clr-primary-lt)', border: '1px solid var(--clr-primary-border)', cursor: 'pointer' }}
                         >
-                          Ver OT {ot.number}
+                          Ver Liq. {ot.number}
                         </button>
                       ) : (
                         <span
                           className="ml-auto px-3 py-2 rounded-lg text-xs font-semibold"
                           style={{ background: 'rgba(217,119,6,0.10)', color: '#d97706', border: '1px solid rgba(217,119,6,0.25)' }}
-                          title="Estado marcado manualmente sin OT vinculada"
+                          title="Estado marcado manualmente sin Liquidación vinculada"
                         >
-                          Sin OT
+                          Sin Liq.
                         </span>
                       )
                     })()}
@@ -1258,7 +1281,7 @@ export default function EquipmentPage() {
                               className="px-3 py-2 rounded-lg text-xs font-semibold"
                               style={{ background: 'var(--clr-orange-bg)', color: 'var(--clr-orange)', border: '1px solid var(--clr-orange-border)' }}
                             >
-                              OT {ot.number}
+                              Liq. {ot.number}
                             </button>
                           )}
                           {activeSession ? (

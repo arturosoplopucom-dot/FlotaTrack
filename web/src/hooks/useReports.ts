@@ -6,7 +6,8 @@ export type ReportPeriod = '1m' | '3m' | '6m' | '1y' | 'all'
 export interface ProfitabilityReport {
   period: ReportPeriod
   summary: {
-    totalRevenue: number; totalCosts: number; grossMargin: number; marginPct: number
+    totalRevenue: number; totalRevenuePen: number; totalRevenueUsd: number
+    totalCosts: number; grossMargin: number; marginPct: number
     totalInvoiced: number; totalCollected: number; pendingCollection: number
     completedOTs: number; activeOTs: number; draftOTs: number; totalMaintCost: number
   }
@@ -14,7 +15,7 @@ export interface ProfitabilityReport {
   byCostCategory: { category: string; amount: number }[]
   byClient:       { name: string; revenue: number; costs: number; margin: number; marginPct: number; otCount: number }[]
   byEquipment:    { name: string; type: string; revenue: number; hours: number; otCount: number }[]
-  topOTs:         { number: string; clientName: string; equipmentName: string; revenue: number; costs: number; margin: number; marginPct: number; startDate: string }[]
+  topOTs:         { number: string; clientName: string; equipmentName: string; revenue: number; costs: number; margin: number; marginPct: number; startDate: string; currency?: string }[]
 }
 
 export interface EquipmentReportItem {
@@ -28,7 +29,7 @@ export interface WorkOrderReportItem {
   equipmentName: string; equipmentType: string; operatorName: string
   location: string | null; startDate: string; endDate: string | null
   billingType: string; quantity: number; unitRate: number; subtotal: number
-  costs: number; margin: number; status: string
+  costs: number; margin: number; status: string; currency?: string
 }
 
 export interface InvoiceReportItem {
@@ -36,6 +37,8 @@ export interface InvoiceReportItem {
   clientName: string; clientRuc: string
   issueDate: string; dueDate: string
   amount: number; igv: number; total: number; paid: number; balance: number
+  totalUsd: number | null; tcambio: number | null; balanceUsd: number | null
+  detraccion: number
   currency: string; status: string
 }
 
@@ -81,7 +84,14 @@ export function useWorkOrdersReport(params: { status?: string; clientId?: string
 }
 
 export function useInvoicesReport(params: { status?: string; clientId?: string } & DateParams) {
-  return useQuery<{ items: InvoiceReportItem[]; summary: { total: number; totalInvoiced: number; totalPaid: number; totalPending: number; totalOverdue: number; statusCounts: Record<string, number> } }>({
+  return useQuery<{
+    items: InvoiceReportItem[]
+    summary: {
+      total: number; totalInvoiced: number; totalPaid: number; totalPending: number; totalOverdue: number
+      totalInvoicedUsd: number; totalPaidUsd: number; totalPendingUsd: number; totalOverdueUsd: number
+      statusCounts: Record<string, number>
+    }
+  }>({
     queryKey: ['report-invoices', params],
     queryFn: () => api.get('/reports/invoices', { params }).then((r) => r.data),
   })
@@ -151,6 +161,8 @@ export interface EquipmentProfitabilityItem {
   revenue: number; opCosts: number; maintCost: number; totalCost: number
   margin: number; marginPct: number; hours: number
   costsByCategory: Record<string, number>
+  workOrders: { id: string; number: string }[]
+  currency: string
 }
 
 export interface EquipmentProfitabilityData {

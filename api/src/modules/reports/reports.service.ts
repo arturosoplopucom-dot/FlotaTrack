@@ -133,6 +133,16 @@ export const reportsService = {
     }
     const byEquipment = Object.values(equipMap).sort((a, b) => b.revenue - a.revenue).slice(0, 6)
 
+    const woCurrencies = await prisma.$queryRaw<{ id: string; currency: string }[]>`SELECT id, currency FROM work_orders WHERE "companyId" = ${companyId}`
+    const curMap = new Map(woCurrencies.map((r) => [r.id, r.currency]))
+
+    let totalRevenuePen = 0, totalRevenueUsd = 0
+    for (const wo of workOrders) {
+      const rev = Number(wo.subtotal)
+      if (curMap.get(wo.id) === 'USD') totalRevenueUsd += rev
+      else totalRevenuePen += rev
+    }
+
     const topOTs = workOrders
       .map((wo) => {
         const costs  = wo.costs.reduce((s, c) => s + Number(c.amount), 0)
@@ -140,14 +150,15 @@ export const reportsService = {
         return { number: wo.number, clientName: wo.client.businessName, equipmentName: wo.equipment.name,
           revenue: Number(wo.subtotal), costs, margin,
           marginPct: Number(wo.subtotal) > 0 ? (margin / Number(wo.subtotal)) * 100 : 0,
-          startDate: wo.startDate }
+          startDate: wo.startDate, currency: curMap.get(wo.id) ?? 'PEN' }
       })
       .sort((a, b) => b.margin - a.margin).slice(0, 5)
 
     return {
       period,
-      summary: { totalRevenue, totalCosts, grossMargin, marginPct, totalInvoiced, totalCollected,
-        pendingCollection: pendingCollectionReal, completedOTs, activeOTs, draftOTs, totalMaintCost },
+      summary: { totalRevenue, totalRevenuePen, totalRevenueUsd, totalCosts, grossMargin, marginPct,
+        totalInvoiced, totalCollected, pendingCollection: pendingCollectionReal,
+        completedOTs, activeOTs, draftOTs, totalMaintCost },
       byMonth, byCostCategory, byClient, byEquipment, topOTs,
     }
   },
@@ -214,6 +225,9 @@ export const reportsService = {
     const statusCounts: Record<string, number> = {}
     let totalRevenue = 0, totalCosts = 0
 
+    const woCurs = await prisma.$queryRaw<{ id: string; currency: string }[]>`SELECT id, currency FROM work_orders WHERE "companyId" = ${companyId}`
+    const curMap2 = new Map(woCurs.map((r) => [r.id, r.currency]))
+
     const items = workOrders.map((wo) => {
       statusCounts[wo.status] = (statusCounts[wo.status] ?? 0) + 1
       const rev  = Number(wo.subtotal)
@@ -228,6 +242,7 @@ export const reportsService = {
         billingType: wo.billingType, quantity: Number(wo.quantity),
         unitRate: Number(wo.unitRate), subtotal: rev, costs: cost,
         margin: rev - cost, status: wo.status,
+        currency: curMap2.get(wo.id) ?? 'PEN',
       }
     })
 
@@ -237,6 +252,8 @@ export const reportsService = {
   // ─── INVOICES ─────────────────────────────────────────────────────────────
   async getInvoicesReport(companyId: string, params: { status?: string; clientId?: string } & DateRangeFilter) {
     const df = dateFilter(params)
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+
     const invoices = await prisma.invoice.findMany({
       where: {
         companyId,
@@ -246,33 +263,66 @@ export const reportsService = {
       },
       include: {
         client:   { select: { businessName: true, ruc: true } },
-        payments: { select: { amount: true } },
+        payments: { select: { amount: true, currency: true } },
       },
       orderBy: { issueDate: 'desc' },
     })
 
     let totalInvoiced = 0, totalPaid = 0, totalOverdue = 0
+    let totalInvoicedUsd = 0, totalPaidUsd = 0, totalOverdueUsd = 0
     const statusCounts: Record<string, number> = {}
 
     const items = invoices.map((inv) => {
-      const paid    = inv.payments.reduce((s, p) => s + Number(p.amount), 0)
-      const balance = Number(inv.total) - paid
-      totalInvoiced += Number(inv.total); totalPaid += paid
-      if (inv.status === 'OVERDUE') totalOverdue += balance
+      const isUsd   = inv.currency === 'USD'
+      const tc      = Number(inv.tcambio ?? 0)
+      const totalUs = Number((inv as any).totalUsd ?? 0)
+      const isPaid  = inv.status === 'PAID'
+      const effectivelyOverdue = !isPaid && (inv.status === 'OVERDUE' || new Date(inv.dueDate) < today)
+
+      let paid: number, balance: number, balanceUsd: number | null = null
+      if (isUsd && totalUs > 0 && tc > 0) {
+        const rawPaidUsd = inv.payments.reduce((s, p) => {
+          const pCur = (p as any).currency ?? 'USD'
+          return s + (pCur === 'PEN' ? Number(p.amount) / tc : Number(p.amount))
+        }, 0)
+        const paidUsd    = isPaid ? totalUs : rawPaidUsd
+        balanceUsd       = isPaid ? 0 : Math.max(0, Math.round((totalUs - rawPaidUsd) * 100) / 100)
+        paid             = Math.round(paidUsd * tc * 100) / 100
+        balance          = Math.round(balanceUsd * tc * 100) / 100
+        totalInvoicedUsd += totalUs
+        totalPaidUsd     += paidUsd
+        if (effectivelyOverdue) totalOverdueUsd += balanceUsd
+      } else {
+        const rawPaid = inv.payments.reduce((s, p) => s + Number(p.amount), 0)
+        paid    = isPaid ? Number(inv.total) : rawPaid
+        balance = isPaid ? 0 : Math.max(0, Number(inv.total) - rawPaid)
+        totalInvoiced += Number(inv.total)
+        totalPaid     += paid
+        if (effectivelyOverdue) totalOverdue += balance
+      }
+
       statusCounts[inv.status] = (statusCounts[inv.status] ?? 0) + 1
       return {
         id: inv.id, series: inv.series, number: inv.number,
         clientName: inv.client.businessName, clientRuc: inv.client.ruc,
         issueDate: inv.issueDate, dueDate: inv.dueDate,
         amount: Number(inv.amount), igv: Number(inv.igv), total: Number(inv.total),
-        paid, balance, currency: inv.currency, status: inv.status,
+        totalUsd: totalUs > 0 ? totalUs : null,
+        tcambio: tc > 0 ? tc : null,
+        detraccion: Number(inv.detraccion ?? 0),
+        paid, balance, balanceUsd, currency: inv.currency, status: inv.status,
       }
     })
 
     return {
       items,
-      summary: { total: items.length, totalInvoiced, totalPaid,
-        totalPending: totalInvoiced - totalPaid, totalOverdue, statusCounts },
+      summary: {
+        total: items.length, totalInvoiced, totalPaid,
+        totalPending: totalInvoiced - totalPaid, totalOverdue,
+        totalInvoicedUsd, totalPaidUsd,
+        totalPendingUsd: Math.max(0, totalInvoicedUsd - totalPaidUsd),
+        totalOverdueUsd, statusCounts,
+      },
     }
   },
 
@@ -471,16 +521,22 @@ export const reportsService = {
       ...(until ? { lte: until } : {}),
     } : undefined
 
-    const equipment = await prisma.equipment.findMany({
+    // Query work orders with costs + service reports for proportional attribution
+    const workOrders = await prisma.workOrder.findMany({
+      where: {
+        companyId,
+        status: { in: ['COMPLETED', 'BILLED', 'PAID', 'ACTIVE'] },
+        ...(df ? { startDate: df } : {}),
+      },
+      include: {
+        costs: { select: { amount: true, category: true } },
+        serviceReports: { select: { equipmentId: true, amount: true, totalHours: true } },
+      },
+    })
+
+    const equipmentList = await prisma.equipment.findMany({
       where: { companyId, active: true },
       include: {
-        workOrders: {
-          where: {
-            ...(df ? { startDate: df } : {}),
-            status: { in: ['COMPLETED', 'BILLED', 'PAID', 'ACTIVE'] },
-          },
-            include: { costs: { select: { amount: true, category: true } } },
-        },
         maintenanceRecords: {
           where: df ? { performedAt: df } : {},
           select: { cost: true },
@@ -489,31 +545,105 @@ export const reportsService = {
       orderBy: { name: 'asc' },
     })
 
-    const items = equipment.map((eq) => {
-      const revenue   = eq.workOrders.reduce((s, wo) => s + Number(wo.subtotal), 0)
-      const opCosts   = eq.workOrders.reduce((s, wo) => s + wo.costs.reduce((cs, c) => cs + Number(c.amount), 0), 0)
+    // Per-equipment attribution maps
+    const eqRevenue:  Map<string, number>             = new Map()
+    const eqOpCosts:  Map<string, number>             = new Map()
+    const eqHours:    Map<string, number>             = new Map()
+    const eqOtIds:    Map<string, Set<string>>        = new Map()
+    const eqCatCosts: Map<string, Record<string, number>> = new Map()
+    const eqWONums:   Map<string, Map<string, string>> = new Map() // eqId → (woId → woNumber)
+    const eqCurrency: Map<string, string>              = new Map() // eqId → dominant currency
+
+    const addTo = (map: Map<string, number>, key: string, val: number) =>
+      map.set(key, (map.get(key) ?? 0) + val)
+
+    const trackWO = (eqId: string, woId: string, woNumber: string, woCurrency: string) => {
+      if (!eqWONums.has(eqId)) eqWONums.set(eqId, new Map())
+      eqWONums.get(eqId)!.set(woId, woNumber)
+      // USD takes precedence: if any OT is USD the equipment's revenue is USD
+      if (woCurrency === 'USD' || !eqCurrency.has(eqId)) eqCurrency.set(eqId, woCurrency)
+    }
+
+    for (const wo of workOrders) {
+      const totalRevenue = Number(wo.subtotal)
+      const totalOpCost  = wo.costs.reduce((s, c) => s + Number(c.amount), 0)
+
+      // Group service reports by equipment
+      const srByEquip = new Map<string, { amount: number; hours: number }>()
+      let totalSrAmount = 0
+      for (const sr of wo.serviceReports) {
+        if (!sr.equipmentId) continue
+        const cur = srByEquip.get(sr.equipmentId) ?? { amount: 0, hours: 0 }
+        cur.amount += Number(sr.amount)
+        cur.hours  += Number(sr.totalHours)
+        srByEquip.set(sr.equipmentId, cur)
+        totalSrAmount += Number(sr.amount)
+      }
+
+      if (srByEquip.size > 0) {
+        // Multi-equipment OT: distribute revenue & costs proportionally by SR amount
+        for (const [eqId, sr] of srByEquip) {
+          const share     = totalSrAmount > 0 ? sr.amount / totalSrAmount : 1 / srByEquip.size
+          const revShare  = totalRevenue * share
+          const costShare = totalOpCost  * share
+
+          addTo(eqRevenue, eqId, revShare)
+          addTo(eqOpCosts, eqId, costShare)
+          addTo(eqHours,   eqId, sr.hours)
+          if (!eqOtIds.has(eqId)) eqOtIds.set(eqId, new Set())
+          eqOtIds.get(eqId)!.add(wo.id)
+          trackWO(eqId, wo.id, wo.number, (wo as any).currency ?? 'PEN')
+
+          if (!eqCatCosts.has(eqId)) eqCatCosts.set(eqId, {})
+          const catMap = eqCatCosts.get(eqId)!
+          for (const c of wo.costs) {
+            const catShare = totalOpCost > 0 ? (Number(c.amount) / totalOpCost) * costShare : 0
+            catMap[c.category] = (catMap[c.category] ?? 0) + catShare
+          }
+        }
+      } else if (wo.equipmentId) {
+        // Single-equipment OT (no service reports or SRs without equipmentId)
+        const eqId = wo.equipmentId
+        const hours = wo.billingType === 'HOURLY' ? Number(wo.quantity) :
+                      wo.billingType === 'DAILY'   ? Number(wo.quantity) * 8 : 0
+
+        addTo(eqRevenue, eqId, totalRevenue)
+        addTo(eqOpCosts, eqId, totalOpCost)
+        addTo(eqHours,   eqId, hours)
+        if (!eqOtIds.has(eqId)) eqOtIds.set(eqId, new Set())
+        eqOtIds.get(eqId)!.add(wo.id)
+        trackWO(eqId, wo.id, wo.number, (wo as any).currency ?? 'PEN')
+
+        if (!eqCatCosts.has(eqId)) eqCatCosts.set(eqId, {})
+        const catMap = eqCatCosts.get(eqId)!
+        for (const c of wo.costs) {
+          catMap[c.category] = (catMap[c.category] ?? 0) + Number(c.amount)
+        }
+      }
+      // OT with no equipmentId and no service reports → unattributed
+    }
+
+    const items = equipmentList.map((eq) => {
+      const revenue   = eqRevenue.get(eq.id) ?? 0
+      const opCosts   = eqOpCosts.get(eq.id) ?? 0
       const maintCost = eq.maintenanceRecords.reduce((s, r) => s + Number(r.cost), 0)
       const totalCost = opCosts + maintCost
       const margin    = revenue - totalCost
       const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0
-      const hours     = eq.workOrders.reduce((s, wo) => {
-        if (wo.billingType === 'HOURLY') return s + Number(wo.quantity)
-        if (wo.billingType === 'DAILY')  return s + Number(wo.quantity) * 8
-        return s
-      }, 0)
-      const costsByCategory: Record<string, number> = {}
-      for (const wo of eq.workOrders) {
-        for (const c of wo.costs) {
-          costsByCategory[c.category] = (costsByCategory[c.category] ?? 0) + Number(c.amount)
-        }
-      }
+      const hours     = eqHours.get(eq.id) ?? 0
+      const otCount   = eqOtIds.get(eq.id)?.size ?? 0
+      const costsByCategory = eqCatCosts.get(eq.id) ?? {}
+      const workOrders = Array.from(eqWONums.get(eq.id)?.entries() ?? [])
+        .map(([id, number]) => ({ id, number }))
+        .sort((a, b) => a.number.localeCompare(b.number))
+
       return {
         id: eq.id, name: eq.name, brand: eq.brand, model: eq.model,
         type: eq.type, status: eq.status,
-        otCount: eq.workOrders.length,
-        revenue, opCosts, maintCost, totalCost,
+        otCount, revenue, opCosts, maintCost, totalCost,
         margin, marginPct, hours,
-        costsByCategory,
+        costsByCategory, workOrders,
+        currency: eqCurrency.get(eq.id) ?? 'PEN',
       }
     }).sort((a, b) => b.revenue - a.revenue)
 

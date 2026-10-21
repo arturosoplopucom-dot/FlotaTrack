@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import AppShell from '../components/AppShell'
 import {
   RefreshCw, CheckCircle, XCircle, AlertTriangle, Globe,
   ChevronRight, Settings, FileDown, Users, Loader2,
+  UserPlus, Trash2, Upload,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -17,6 +19,7 @@ type SunatConfig = {
   nubefactUrl?: string
   hasNubefactToken?: boolean
   sunatPdfPath?: string
+  defaultDetraccionPct?: number
 } | null
 
 type SyncResult = {
@@ -26,6 +29,13 @@ type SyncResult = {
   matched: number
   skipped: number
   newClients: number
+}
+
+type ImportClientsResult = {
+  totalFacturas: number
+  totalCompradores: number
+  created: number
+  skipped: number
 }
 
 type LogEntry = { type: 'progress' | 'done' | 'error'; text: string; time: string }
@@ -48,17 +58,30 @@ const YEARS = Array.from({ length: 4 }, (_, i) => CURRENT_YEAR - i)
 
 export default function SunatSyncPage() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const now = new Date()
   const [month, setMonth] = useState(now.getMonth())  // 0-based
   const [year, setYear]   = useState(now.getFullYear())
 
-  const [config, setConfig]     = useState<SunatConfig | undefined>(undefined)
+  const [config, setConfig]         = useState<SunatConfig | undefined>(undefined)
   const [cfgLoading, setCfgLoading] = useState(true)
 
-  const [running, setRunning]   = useState(false)
-  const [log, setLog]           = useState<LogEntry[]>([])
-  const [result, setResult]     = useState<SyncResult | null>(null)
-  const [error, setError]       = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
+  const [log, setLog]         = useState<LogEntry[]>([])
+  const [result, setResult]   = useState<SyncResult | null>(null)
+  const [error, setError]     = useState<string | null>(null)
+
+  // Import clients only
+  const [importingClients, setImportingClients]   = useState(false)
+  const [importResult, setImportResult]           = useState<ImportClientsResult | null>(null)
+  const [importError, setImportError]             = useState<string | null>(null)
+  const clientCsvRef = useRef<HTMLInputElement>(null)
+
+  // Delete all invoices
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deletingInvoices, setDeletingInvoices]   = useState(false)
+  const [deleteResult, setDeleteResult]           = useState<{ deleted: number } | null>(null)
+  const [deleteError, setDeleteError]             = useState<string | null>(null)
 
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -150,6 +173,51 @@ export default function SunatSyncPage() {
       setError(msg)
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function handleImportClients(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImportingClients(true)
+    setImportResult(null)
+    setImportError(null)
+    try {
+      const csvContent = await file.text()
+      const r = await api.post<ImportClientsResult>('/sunat/import-clients', { csvContent })
+      setImportResult(r.data)
+      qc.invalidateQueries({ queryKey: ['clients'] })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error al importar clientes'
+      setImportError((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? msg)
+    } finally {
+      setImportingClients(false)
+      // Reset input so same file can be re-selected
+      if (clientCsvRef.current) clientCsvRef.current.value = ''
+    }
+  }
+
+  async function handleDeleteInvoices() {
+    if (deleteConfirmText !== 'BORRAR TODO') return
+    setDeletingInvoices(true)
+    setDeleteResult(null)
+    setDeleteError(null)
+    try {
+      const r = await api.delete<{ deleted: number }>('/sunat/invoices', {
+        data: { confirm: 'BORRAR_TODO' },
+      })
+      setDeleteResult(r.data)
+      setDeleteConfirmText('')
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['analytics'] })
+      qc.invalidateQueries({ queryKey: ['payments-history'] })
+      qc.invalidateQueries({ queryKey: ['payments-all'] })
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? (err instanceof Error ? err.message : 'Error al eliminar facturas')
+      setDeleteError(msg)
+    } finally {
+      setDeletingInvoices(false)
     }
   }
 
@@ -357,7 +425,7 @@ export default function SunatSyncPage() {
 
         {/* ── Result cards ── */}
         {result && (
-          <div style={{ display:'flex', gap:12, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginBottom:24 }}>
             {[
               { icon: Globe,        label:'Total SUNAT',     value: result.totalSunat,  color:'#3b82f6', bg:'#eff6ff', border:'#bfdbfe' },
               { icon: FileDown,     label:'Importadas',      value: result.imported,    color:'#16a34a', bg:'#f0fdf4', border:'#bbf7d0' },
@@ -377,6 +445,163 @@ export default function SunatSyncPage() {
             ))}
           </div>
         )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            IMPORTAR SOLO CLIENTES DESDE CSV RVIE
+        ═══════════════════════════════════════════════════════════════════════ */}
+        <div style={{
+          background:'var(--clr-surface)', border:'1px solid var(--clr-border)',
+          borderRadius:12, padding:'18px 20px', marginBottom:20,
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+            <UserPlus size={16} style={{ color:'#0891b2' }} />
+            <div style={{ fontSize:13, fontWeight:700, color:'var(--clr-text)' }}>
+              Importar clientes desde CSV RVIE
+            </div>
+          </div>
+          <p style={{ fontSize:12, color:'var(--clr-text-muted)', margin:'0 0 14px', lineHeight:1.5 }}>
+            Sube el archivo CSV exportado del SIRE (RVIE) para registrar los compradores únicos como clientes.
+            <strong style={{ color:'var(--clr-text)' }}> No se crean facturas.</strong>{' '}
+            Los clientes ya existentes (mismo RUC) se omiten automáticamente.
+          </p>
+
+          <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+            <label style={{
+              display:'inline-flex', alignItems:'center', gap:7,
+              padding:'8px 18px', borderRadius:8, fontSize:13, fontWeight:600,
+              border:'1px solid #0891b2', color:'#0891b2', cursor:'pointer',
+              background:'#f0fdff', transition:'background 0.15s',
+            }}>
+              {importingClients
+                ? <Loader2 size={14} style={{ animation:'spin 1s linear infinite' }} />
+                : <Upload size={14} />}
+              {importingClients ? 'Importando…' : 'Seleccionar CSV RVIE'}
+              <input
+                ref={clientCsvRef}
+                type="file"
+                accept=".csv,.txt"
+                style={{ display:'none' }}
+                disabled={importingClients}
+                onChange={handleImportClients}
+              />
+            </label>
+          </div>
+
+          {/* Resultado importación */}
+          {importResult && (
+            <div style={{
+              marginTop:14, display:'flex', gap:10, flexWrap:'wrap',
+            }}>
+              {[
+                { label:'Líneas CSV',      value: importResult.totalFacturas,    color:'#475569' },
+                { label:'Compradores únicos', value: importResult.totalCompradores, color:'#0891b2' },
+                { label:'Clientes creados',   value: importResult.created,          color:'#16a34a' },
+                { label:'Ya existían',        value: importResult.skipped,          color:'#d97706' },
+              ].map(({ label, value, color }) => (
+                <div key={label} style={{
+                  padding:'10px 16px', borderRadius:10,
+                  background:'var(--clr-surface-hover)', border:'1px solid var(--clr-border)',
+                  textAlign:'center', minWidth:110,
+                }}>
+                  <div style={{ fontSize:22, fontWeight:800, color, lineHeight:1 }}>{value}</div>
+                  <div style={{ fontSize:11, color:'var(--clr-text-muted)', marginTop:3, fontWeight:600, textTransform:'uppercase', letterSpacing:'.04em' }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {importError && (
+            <div style={{
+              marginTop:12, padding:'8px 12px', borderRadius:8,
+              background:'#fef2f2', border:'1px solid #fecaca',
+              fontSize:12, color:'#b91c1c',
+            }}>
+              {importError}
+            </div>
+          )}
+        </div>
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            ZONA DE PELIGRO — ELIMINAR TODAS LAS FACTURAS
+        ═══════════════════════════════════════════════════════════════════════ */}
+        <div style={{
+          background:'#fff5f5', border:'2px solid #fecaca',
+          borderRadius:12, padding:'18px 20px', marginBottom:20,
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+            <Trash2 size={16} style={{ color:'#dc2626' }} />
+            <div style={{ fontSize:13, fontWeight:700, color:'#dc2626' }}>
+              Zona de peligro — Limpiar todas las facturas
+            </div>
+          </div>
+          <p style={{ fontSize:12, color:'#7f1d1d', margin:'0 0 4px', lineHeight:1.5 }}>
+            Elimina <strong>todas</strong> las facturas de tu empresa de forma permanente.{' '}
+            <strong>Esta acción no se puede deshacer.</strong>
+          </p>
+          <p style={{ fontSize:12, color:'#991b1b', margin:'0 0 14px', lineHeight:1.5 }}>
+            Los <strong>clientes se conservan</strong>. Solo se eliminan facturas, cuotas, pagos y sus vínculos con Órdenes de Trabajo.
+            Usa esto para hacer un inicio limpio desde septiembre con facturas correctamente vinculadas a OTs.
+          </p>
+
+          {!deleteResult ? (
+            <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+              <input
+                type="text"
+                placeholder='Escribe "BORRAR TODO" para confirmar'
+                value={deleteConfirmText}
+                onChange={e => setDeleteConfirmText(e.target.value)}
+                style={{
+                  padding:'8px 12px', borderRadius:8, fontSize:13, fontWeight:500,
+                  border:'1px solid #fca5a5', background:'#fff', color:'#1e293b',
+                  outline:'none', width:280,
+                }}
+              />
+              <button
+                onClick={handleDeleteInvoices}
+                disabled={deleteConfirmText !== 'BORRAR TODO' || deletingInvoices}
+                style={{
+                  display:'inline-flex', alignItems:'center', gap:7,
+                  padding:'8px 20px', borderRadius:8, fontSize:13, fontWeight:700,
+                  border:'none', transition:'background 0.15s',
+                  cursor: (deleteConfirmText !== 'BORRAR TODO' || deletingInvoices) ? 'not-allowed' : 'pointer',
+                  background: (deleteConfirmText !== 'BORRAR TODO' || deletingInvoices) ? '#fecaca' : '#dc2626',
+                  color: (deleteConfirmText !== 'BORRAR TODO' || deletingInvoices) ? '#fca5a5' : '#fff',
+                }}
+              >
+                {deletingInvoices
+                  ? <Loader2 size={14} style={{ animation:'spin 1s linear infinite' }} />
+                  : <Trash2 size={14} />}
+                {deletingInvoices ? 'Eliminando…' : 'Eliminar todas las facturas'}
+              </button>
+            </div>
+          ) : (
+            <div style={{
+              display:'flex', alignItems:'center', gap:10,
+              padding:'12px 16px', borderRadius:10,
+              background:'#f0fdf4', border:'1px solid #bbf7d0',
+            }}>
+              <CheckCircle size={18} style={{ color:'#16a34a', flexShrink:0 }} />
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:'#15803d' }}>
+                  {deleteResult.deleted} factura{deleteResult.deleted !== 1 ? 's' : ''} eliminada{deleteResult.deleted !== 1 ? 's' : ''} correctamente
+                </div>
+                <div style={{ fontSize:12, color:'#166534', marginTop:2 }}>
+                  Los clientes permanecen intactos. Ya puedes importar facturas desde septiembre.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {deleteError && (
+            <div style={{
+              marginTop:12, padding:'8px 12px', borderRadius:8,
+              background:'#fef2f2', border:'1px solid #fecaca',
+              fontSize:12, color:'#b91c1c',
+            }}>
+              {deleteError}
+            </div>
+          )}
+        </div>
 
         {/* ── Padding bottom ── */}
         <div style={{ height: 40 }} />

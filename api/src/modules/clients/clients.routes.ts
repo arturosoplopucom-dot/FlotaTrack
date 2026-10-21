@@ -139,6 +139,15 @@ router.post('/import-contacts', async (req: AuthRequest, res: Response) => {
   }
 })
 
+router.post('/:id/recalculate-detraccion', async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await clientsService.recalculateDetraccion(req.user!.companyId, req.params.id as string)
+    res.json(result)
+  } catch (err: unknown) {
+    res.status(400).json({ message: err instanceof Error ? err.message : 'Error' })
+  }
+})
+
 router.delete('/:id', async (req: AuthRequest, res: Response) => {
   try {
     await clientsService.remove(req.user!.companyId, req.params.id as string)

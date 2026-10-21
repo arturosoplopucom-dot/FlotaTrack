@@ -44,11 +44,15 @@ type InvoiceDetail = {
   number: string
   issueDate: string
   dueDate: string
+  currency: string
   total: number
+  totalUsd: number | null
+  tcambio: number | null
   totalPaid: number
   balance: number
   daysOverdue: number
   bucket: string
+  detraccion: number
 }
 
 type ClientDetailData = {
@@ -260,7 +264,7 @@ function ClientDetailModal({
             <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--clr-bg)', borderBottom: '1px solid var(--clr-border)' }}>
-                  {['Factura', 'Emisión', 'Vencimiento', 'Días', 'Total', 'Pagado', 'Saldo', 'Estado'].map((h) => (
+                  {['Factura', 'Emisión', 'Vencimiento', 'Días', 'Total', 'Pagado', 'Saldo', 'Detrac.', 'Estado'].map((h) => (
                     <th key={h} style={{ padding: '9px 14px', textAlign: h === 'Factura' ? 'left' : 'right', fontSize: 10, fontWeight: 600, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                       {h}
                     </th>
@@ -279,6 +283,9 @@ function ClientDetailModal({
                           <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--clr-doc-number)', fontSize: 12 }}>
                             {inv.series}-{String(inv.number).padStart(8, '0')}
                           </span>
+                          {inv.currency === 'USD' && (
+                            <span style={{ fontSize: 9, fontWeight: 700, background: '#dbeafe', color: '#1d4ed8', borderRadius: 3, padding: '1px 4px', fontFamily: 'sans-serif' }}>USD</span>
+                          )}
                         </div>
                       </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-subtle)', fontSize: 12 }}>
@@ -300,9 +307,24 @@ function ClientDetailModal({
                           </span>
                         )}
                       </td>
-                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontSize: 12, whiteSpace: 'nowrap' }}>{fmtFull(inv.total)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-muted)', fontSize: 12, whiteSpace: 'nowrap' }}>
+                        {inv.currency === 'USD' && inv.totalUsd != null
+                          ? <><span style={{ fontWeight: 600 }}>{`$ ${inv.totalUsd.toFixed(2)}`}</span>
+                              {inv.tcambio && <div style={{ fontSize: 9, color: 'var(--clr-text-subtle)', fontWeight: 400 }}>TC {inv.tcambio.toFixed(3)}</div>}
+                            </>
+                          : fmtFull(inv.total)
+                        }
+                      </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', color: 'var(--clr-text-subtle)', fontSize: 12, whiteSpace: 'nowrap' }}>{inv.totalPaid > 0 ? fmtFull(inv.totalPaid) : '—'}</td>
                       <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: bk.color, fontSize: 13, whiteSpace: 'nowrap' }}>{fmtFull(inv.balance)}</td>
+                      <td style={{ padding: '9px 14px', textAlign: 'right' }}>
+                        {inv.detraccion > 0
+                          ? <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: '#fef9c3', color: '#854d0e', whiteSpace: 'nowrap' }}>
+                              {fmtFull(inv.detraccion)}
+                            </span>
+                          : <span style={{ color: 'var(--clr-border)' }}>—</span>
+                        }
+                      </td>
                       <td style={{ padding: '9px 14px', textAlign: 'right' }}>
                         {inv.daysOverdue > 0 ? (
                           <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
@@ -399,6 +421,7 @@ function exportPDF(data: AgingData, asOf: string, details: ClientDetails = {}, c
               <th style="padding:4px 8px; text-align:right; color:#1e40af; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Total</th>
               <th style="padding:4px 8px; text-align:right; color:#1e40af; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Pagado</th>
               <th style="padding:4px 8px; text-align:right; color:#1e40af; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Saldo</th>
+              <th style="padding:4px 8px; text-align:right; color:#1e40af; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Detrac.</th>
               <th style="padding:4px 8px; text-align:center; color:#1e40af; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Estado</th>
             </tr>
           </thead>
@@ -408,13 +431,14 @@ function exportPDF(data: AgingData, asOf: string, details: ClientDetails = {}, c
               const dDate = new Date(inv.dueDate).toLocaleDateString('es-PE', { day:'2-digit', month:'2-digit', year:'numeric' })
               const iDate = new Date(inv.issueDate).toLocaleDateString('es-PE', { day:'2-digit', month:'2-digit', year:'numeric' })
               return `<tr style="background:${j % 2 === 0 ? '#f0f9ff' : '#e0f2fe'}; border-bottom:1px solid #bfdbfe40;">
-                <td style="padding:4px 8px; font-weight:700; color:#1e293b; font-family:monospace; font-size:10px;">${inv.series}-${String(inv.number).padStart(8,'0')}</td>
+                <td style="padding:4px 8px; font-weight:700; color:#1e293b; font-family:monospace; font-size:10px;">${inv.series}-${String(inv.number).padStart(8,'0')}${inv.currency === 'USD' ? ' <span style="font-size:8px;background:#dbeafe;color:#1d4ed8;padding:1px 4px;border-radius:3px;font-family:sans-serif">USD</span>' : ''}</td>
                 <td style="padding:4px 8px; color:#64748b; font-size:10px;">${iDate}</td>
                 <td style="padding:4px 8px; color:${inv.daysOverdue > 0 ? bk.color : '#64748b'}; font-weight:${inv.daysOverdue > 0 ? '600' : '400'}; font-size:10px;">${dDate}</td>
                 <td style="padding:4px 8px; text-align:right; color:${inv.daysOverdue > 0 ? bk.color : '#16a34a'}; font-weight:700; font-size:10px;">${inv.daysOverdue > 0 ? `+${inv.daysOverdue}d` : 'Al día'}</td>
-                <td style="padding:4px 8px; text-align:right; color:#64748b; font-size:10px;">${fmtT(inv.total)}</td>
+                <td style="padding:4px 8px; text-align:right; color:#64748b; font-size:10px;">${inv.currency === 'USD' && inv.totalUsd != null ? `$ ${inv.totalUsd.toFixed(2)}${inv.tcambio ? `<br><span style="font-size:8px;color:#94a3b8">TC ${inv.tcambio.toFixed(3)}</span>` : ''}` : fmtT(inv.total)}</td>
                 <td style="padding:4px 8px; text-align:right; color:#64748b; font-size:10px;">${inv.totalPaid > 0 ? fmtT(inv.totalPaid) : '—'}</td>
                 <td style="padding:4px 8px; text-align:right; font-weight:700; color:${bk.color}; font-size:10px;">${fmtT(inv.balance)}</td>
+                <td style="padding:4px 8px; text-align:right; font-size:10px;">${inv.detraccion > 0 ? `<span style="font-size:9px; font-weight:700; padding:1px 5px; border-radius:3px; background:#fef9c3; color:#854d0e; white-space:nowrap;">${fmtT(inv.detraccion)}</span>` : '—'}</td>
                 <td style="padding:4px 8px; text-align:center;">
                   <span style="font-size:9px; font-weight:700; color:${bk.color}; background:${bk.color}18; padding:1px 6px; border-radius:20px; white-space:nowrap;">${bk.label}</span>
                 </td>
@@ -1162,7 +1186,7 @@ export default function AgingReportPage() {
       )}
 
       {/* Payment registration modal — zIndex 400 renders above ClientDetailModal (300) */}
-      <PaymentModal invoice={payInvoice} onClose={() => setPayInvoice(null)} />
+      <PaymentModal key={payInvoice?.id ?? ''} invoice={payInvoice} onClose={() => setPayInvoice(null)} />
 
       {/* Alert clients selection modal */}
       {showAlertModal && data && (() => {

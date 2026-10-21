@@ -1,5 +1,19 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, QueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+
+// Invalida todas las queries afectadas cuando se registra o elimina un pago.
+// Llámala desde cualquier lugar donde cambie el estado de cobro.
+export function invalidatePaymentQueries(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['invoices'] })       // listas + dashboard (prefix match)
+  qc.invalidateQueries({ queryKey: ['invoice'] })        // detalle individual
+  qc.invalidateQueries({ queryKey: ['payments-history'] })
+  qc.invalidateQueries({ queryKey: ['payments-all'] })
+  qc.invalidateQueries({ queryKey: ['analytics'] })
+  qc.invalidateQueries({ queryKey: ['profitability'] })
+  qc.invalidateQueries({ queryKey: ['report-invoices'] })
+  qc.invalidateQueries({ queryKey: ['report-payments'] })
+  qc.invalidateQueries({ queryKey: ['report-clients'] })
+}
 
 export type InvoiceWorkOrder = {
   id: string
@@ -37,6 +51,8 @@ export type Invoice = {
   dueDate: string
   status: 'PENDING' | 'PARTIAL' | 'PAID' | 'OVERDUE'
   currency: 'PEN' | 'USD'
+  totalUsd?: string | null   // monto original en USD (cuando currency=USD y se enriqueció desde XML)
+  tcambio?: string | null    // tipo de cambio PEN/USD aplicado por SUNAT
   daysUntilDue: number
   urgency: 'overdue' | 'critical' | 'warning' | 'ok'
   client: { businessName: string; ruc: string; whatsapp?: string; email?: string }
@@ -45,11 +61,12 @@ export type Invoice = {
 }
 
 export type Dashboard = {
-  overdue: { amount: number; count: number }
-  dueSoon: { amount: number; count: number }
-  current: { amount: number; count: number }
-  paid: { amount: number; count: number }
-  totalPending: number
+  overdue: { amount: number; amountUsd: number; count: number }
+  dueSoon: { amount: number; amountUsd: number; count: number }
+  current: { amount: number; amountUsd: number; count: number }
+  paid:    { amount: number; amountUsd: number; count: number }
+  totalPending:    number
+  totalPendingUsd: number
 }
 
 export const useDashboard = () =>
@@ -78,7 +95,7 @@ export const useRegisterPayment = () => {
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & Record<string, unknown>) =>
       api.post(`/invoices/${id}/payments`, data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['invoices'] }),
+    onSuccess: () => invalidatePaymentQueries(qc),
   })
 }
 
@@ -87,6 +104,9 @@ export const useUpdateInvoice = () => {
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & Record<string, unknown>) =>
       api.patch(`/invoices/${id}`, data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['invoices'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices'] })
+      qc.invalidateQueries({ queryKey: ['invoice'] })
+    },
   })
 }

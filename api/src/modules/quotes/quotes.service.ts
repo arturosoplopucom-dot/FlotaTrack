@@ -10,7 +10,10 @@ export const quotesService = {
       include: {
         client: { select: { businessName: true, ruc: true, phone: true, whatsapp: true, email: true } },
         equipment: { select: { name: true, type: true } },
-        items: { orderBy: { order: 'asc' } },
+        items: {
+          orderBy: { order: 'asc' },
+          include: { equipment: { select: { name: true, type: true } } },
+        },
         workOrder: { select: { id: true, number: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -22,8 +25,11 @@ export const quotesService = {
       where: { companyId, id },
       include: {
         client: { select: { businessName: true, ruc: true, contactName: true, phone: true, whatsapp: true, email: true, address: true } },
-        equipment: { select: { name: true, type: true, hourlyRate: true, dailyRate: true } },
-        items: { orderBy: { order: 'asc' } },
+        equipment: { select: { name: true, type: true, hourlyRate: true, dailyRate: true, hourlyRatePen: true, hourlyRateUsd: true, dailyRatePen: true, dailyRateUsd: true } },
+        items: {
+          orderBy: { order: 'asc' },
+          include: { equipment: { select: { name: true, type: true } } },
+        },
         workOrder: { select: { id: true, number: true } },
       },
     })
@@ -49,18 +55,21 @@ export const quotesService = {
     validUntil: string
     currency?: 'PEN' | 'USD'
     notes?: string
-    items: { description: string; quantity: number; unitPrice: number; order?: number }[]
+    items: { equipmentId?: string; description: string; quantity: number; unitPrice: number; order?: number }[]
   }) {
     const subtotal = data.items.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
     const igv = Math.round(subtotal * IGV_RATE * 100) / 100
     const total = Math.round((subtotal + igv) * 100) / 100
+
+    // Derive primary equipment from items if not explicitly set (use first item's equipment)
+    const derivedEquipmentId = data.equipmentId ?? data.items.find(i => i.equipmentId)?.equipmentId ?? null
 
     return prisma.quote.create({
       data: {
         companyId,
         number: await this.nextNumber(companyId),
         clientId: data.clientId,
-        equipmentId: data.equipmentId ?? null,
+        equipmentId: derivedEquipmentId,
         validUntil: new Date(data.validUntil),
         currency: data.currency ?? 'PEN',
         notes: data.notes ?? null,
@@ -69,6 +78,7 @@ export const quotesService = {
         total,
         items: {
           create: data.items.map((it, idx) => ({
+            equipmentId: it.equipmentId ?? null,
             description: it.description,
             quantity: it.quantity,
             unitPrice: it.unitPrice,
@@ -90,7 +100,7 @@ export const quotesService = {
     validUntil?: string
     currency?: 'PEN' | 'USD'
     notes?: string
-    items?: { description: string; quantity: number; unitPrice: number; order?: number }[]
+    items?: { equipmentId?: string; description: string; quantity: number; unitPrice: number; order?: number }[]
   }) {
     await this.findOne(companyId, id)
 
@@ -101,11 +111,16 @@ export const quotesService = {
       totals = { subtotal, igv, total: Math.round((subtotal + igv) * 100) / 100 }
     }
 
+    // Re-derive primary equipment from items when updating
+    const derivedEquipmentId = data.equipmentId !== undefined
+      ? (data.equipmentId ?? null)
+      : data.items?.find(i => i.equipmentId)?.equipmentId ?? undefined
+
     return prisma.quote.update({
       where: { id },
       data: {
         ...(data.clientId ? { clientId: data.clientId } : {}),
-        ...(data.equipmentId !== undefined ? { equipmentId: data.equipmentId ?? null } : {}),
+        ...(derivedEquipmentId !== undefined ? { equipmentId: derivedEquipmentId } : {}),
         ...(data.validUntil ? { validUntil: new Date(data.validUntil) } : {}),
         ...(data.currency ? { currency: data.currency } : {}),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
@@ -114,6 +129,7 @@ export const quotesService = {
           items: {
             deleteMany: {},
             create: data.items.map((it, idx) => ({
+              equipmentId: it.equipmentId ?? null,
               description: it.description,
               quantity: it.quantity,
               unitPrice: it.unitPrice,

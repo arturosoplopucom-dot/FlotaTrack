@@ -8,9 +8,11 @@ import AppShell from '../components/AppShell'
 import ExportMenu from '../components/ExportMenu'
 import { buildPastelHtmlHead, buildPastelHeader, buildPastelFooter } from '../utils/exportUtils'
 
-const fmt  = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtK = (n: number) => n >= 1000 ? `S/ ${(n / 1000).toFixed(1)}k` : fmt(n)
-const fmtD = (d: string) => format(parseISO(d), 'dd/MM/yyyy')
+const fmt     = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtUsd  = (n: number) => '$ '  + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtK    = (n: number) => n >= 1000 ? `S/ ${(n / 1000).toFixed(1)}k` : fmt(n)
+const fmtUsdK = (n: number) => n >= 1000 ? `$ ${(n / 1000).toFixed(1)}k` : fmtUsd(n)
+const fmtD    = (d: string) => format(parseISO(d), 'dd/MM/yyyy')
 
 function daysOverdue(dueDateStr: string) {
   return Math.floor((Date.now() - new Date(dueDateStr).getTime()) / 86_400_000)
@@ -47,7 +49,9 @@ type EnrichedItem = {
   clientName: string; clientRuc: string
   issueDate: string; dueDate: string
   total: number; paid: number; balance: number
-  status: string; days: number
+  totalUsd: number | null; tcambio: number | null; balanceUsd: number | null
+  detraccion: number
+  currency: string; status: string; days: number
   bucket: '0-30' | '31-60' | '61-90' | '90+' | null
 }
 
@@ -110,18 +114,34 @@ function buildPdfHtml(
     const estBg    = isOv ? (pdf?.bg ?? '#fee2e2')    : inv.status === 'PARTIAL' ? '#fef3c7' : '#dbeafe'
     const leftBorder = isOv && pdf ? `border-left:3px solid ${pdf.color};` : ''
     const bg = i % 2 === 0 ? '#fff' : '#f8fafc'
+    const isUsd = inv.currency === 'USD' && inv.totalUsd != null
+    const totalStr = isUsd
+      ? `$ ${inv.totalUsd!.toFixed(2)}<br><span style="font-size:8px;color:#94a3b8">TC ${inv.tcambio?.toFixed(3) ?? '—'}</span>`
+      : fmt(inv.total)
+    const paidStr  = isUsd && inv.balanceUsd != null
+      ? (inv.totalUsd! - inv.balanceUsd > 0 ? `$ ${(inv.totalUsd! - inv.balanceUsd).toFixed(2)}` : '—')
+      : (inv.paid > 0 ? fmt(inv.paid) : '—')
+    const balStr   = isUsd && inv.balanceUsd != null
+      ? `$ ${inv.balanceUsd.toFixed(2)}`
+      : fmt(inv.balance)
     return `
       <tr style="background:${bg};${leftBorder}">
-        <td style="padding:6px 8px;font-family:monospace;color:#1d4ed8;font-size:10px;white-space:nowrap">${inv.series}-${inv.number.padStart(8, '0')}</td>
+        <td style="padding:6px 8px;font-family:monospace;color:#1d4ed8;font-size:10px;white-space:nowrap">${inv.series}-${inv.number.padStart(8, '0')}${isUsd ? ' <span style="font-size:8px;background:#dbeafe;color:#1d4ed8;padding:1px 4px;border-radius:3px;font-family:sans-serif">USD</span>' : ''}</td>
         <td style="padding:6px 8px;font-size:10px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${inv.clientName}</td>
         <td style="padding:6px 8px;font-size:9px;color:#64748b;font-family:monospace">${inv.clientRuc}</td>
         <td style="padding:6px 8px;font-size:10px;white-space:nowrap;color:${isOv ? (pdf?.color ?? '#b91c1c') : '#475569'}">${fmtD(inv.dueDate)}</td>
         <td style="padding:6px 8px;text-align:center">
           ${inv.days > 0 ? `<span style="font-size:9px;font-weight:700;color:${pdf?.color};background:${pdf?.bg};padding:2px 6px;border-radius:20px">+${inv.days}d</span>` : '<span style="color:#cbd5e1">—</span>'}
         </td>
-        <td style="padding:6px 8px;text-align:right;font-size:10px;color:#64748b">${fmt(inv.total)}</td>
-        <td style="padding:6px 8px;text-align:right;font-size:10px;color:${inv.paid > 0 ? '#16a34a' : '#cbd5e1'}">${inv.paid > 0 ? fmt(inv.paid) : '—'}</td>
-        <td style="padding:6px 8px;text-align:right;font-size:10px;font-weight:700;color:${isOv ? (pdf?.color ?? '#b91c1c') : '#92400e'}">${fmt(inv.balance)}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:10px;color:#64748b">${totalStr}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:10px;color:${inv.paid > 0 || (isUsd && inv.balanceUsd != null && inv.totalUsd! > inv.balanceUsd) ? '#16a34a' : '#cbd5e1'}">${paidStr}</td>
+        <td style="padding:6px 8px;text-align:right;font-size:10px;font-weight:700;color:${isOv ? (pdf?.color ?? '#b91c1c') : '#92400e'}">${balStr}</td>
+        <td style="padding:6px 8px;text-align:center">
+          ${inv.detraccion > 0
+            ? `<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:#fef9c3;color:#854d0e">${fmt(inv.detraccion)}</span>`
+            : '<span style="color:#cbd5e1">—</span>'
+          }
+        </td>
         <td style="padding:6px 8px;text-align:center">
           <span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;background:${estBg};color:${estColor}">${estLabel}</span>
         </td>
@@ -165,7 +185,7 @@ ${filtersHtml ? `<div style="margin-bottom:10px">${filtersHtml}</div>` : ''}
     <tr>
       <th>Factura</th><th>Cliente</th><th>RUC</th>
       <th>Vencimiento</th><th class="c">Mora</th>
-      <th class="r">Total</th><th class="r">Cobrado</th><th class="r">Saldo</th><th class="c">Estado</th>
+      <th class="r">Total</th><th class="r">Cobrado</th><th class="r">Saldo</th><th class="c">Detrac.</th><th class="c">Estado</th>
     </tr>
   </thead>
   <tbody>${rows}</tbody>
@@ -175,6 +195,7 @@ ${filtersHtml ? `<div style="margin-bottom:10px">${filtersHtml}</div>` : ''}
         ${items.length} factura${items.length !== 1 ? 's' : ''}${meta.hasFilters ? ' (filtradas)' : ''} · Total pendiente: ${fmt(meta.total)}
       </td>
       <td style="text-align:right;color:#92400e;font-size:13px">${fmt(grand)}</td>
+      <td></td>
       <td></td>
     </tr>
   </tfoot>
@@ -233,11 +254,15 @@ export default function CxCReportPage() {
     ...(overdueData?.items ?? []),
   ], [pendingData, partialData, overdueData])
 
+  const todayMidnight = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d }, [])
+
   const enriched = useMemo(() =>
     allItems.map((inv) => {
-      const days = inv.status === 'OVERDUE' ? Math.max(0, daysOverdue(inv.dueDate)) : 0
-      return { ...inv, days, bucket: inv.status === 'OVERDUE' ? agingBucket(days) : null }
-    }), [allItems])
+      // Una factura es vencida si el status ya es OVERDUE, o si su fecha de vencimiento ya pasó
+      const effectivelyOverdue = inv.status === 'OVERDUE' || new Date(inv.dueDate) < todayMidnight
+      const days = effectivelyOverdue ? Math.max(0, daysOverdue(inv.dueDate)) : 0
+      return { ...inv, days, bucket: effectivelyOverdue ? agingBucket(days) : null }
+    }), [allItems, todayMidnight])
 
   // ── Unique clients for dropdown ────────────────────────────────────────────
   const clientOptions = useMemo(() => {
@@ -248,20 +273,25 @@ export default function CxCReportPage() {
       .sort((a, b) => a.name.localeCompare(b.name, 'es'))
   }, [enriched])
 
-  // ── Aging buckets summary ─────────────────────────────────────────────────
-  const overdueItems = enriched.filter((i) => i.status === 'OVERDUE')
-  const buckets: Record<string, { count: number; amount: number }> = {
-    '0-30': { count: 0, amount: 0 }, '31-60': { count: 0, amount: 0 },
-    '61-90': { count: 0, amount: 0 }, '90+':   { count: 0, amount: 0 },
+  // ── Aging buckets summary — basado en fecha de vencimiento, no solo status DB ──
+  const overdueItems = enriched.filter((i) => i.bucket !== null)
+  const buckets: Record<string, { count: number; amount: number; amountUsd: number }> = {
+    '0-30': { count: 0, amount: 0, amountUsd: 0 }, '31-60': { count: 0, amount: 0, amountUsd: 0 },
+    '61-90': { count: 0, amount: 0, amountUsd: 0 }, '90+':  { count: 0, amount: 0, amountUsd: 0 },
   }
   overdueItems.forEach((inv) => {
     const b = inv.bucket!
     buckets[b].count++
-    buckets[b].amount += inv.balance
+    if (inv.currency === 'USD' && inv.balanceUsd != null) buckets[b].amountUsd += inv.balanceUsd
+    else buckets[b].amount += inv.balance
   })
-  const maxBucket    = Math.max(...Object.values(buckets).map((b) => b.amount), 1)
-  const totalPending = enriched.reduce((s, i) => s + i.balance, 0)
-  const totalOverdue = overdueItems.reduce((s, i) => s + i.balance, 0)
+  const maxBucket = Math.max(...Object.values(buckets).map((b) => b.amount + b.amountUsd), 1)
+  const totalPendingPen = enriched.filter(i => i.currency !== 'USD').reduce((s, i) => s + i.balance, 0)
+  const totalPendingUsd = enriched.filter(i => i.currency === 'USD').reduce((s, i) => s + (i.balanceUsd ?? 0), 0)
+  const totalPending    = totalPendingPen  // kept for PDF compat (PEN only)
+  const totalOverduePen = overdueItems.filter(i => i.currency !== 'USD').reduce((s, i) => s + i.balance, 0)
+  const totalOverdueUsd = overdueItems.filter(i => i.currency === 'USD').reduce((s, i) => s + (i.balanceUsd ?? 0), 0)
+  const totalOverdue    = totalOverduePen  // kept for PDF compat
 
   // ── Filtered + sorted ─────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -270,9 +300,11 @@ export default function CxCReportPage() {
     const to   = dateTo   ? new Date(dateTo   + 'T23:59:59') : null
     return enriched
       .filter((inv) => {
-        if (statusFilter !== 'ALL' && inv.status !== statusFilter) return false
+        const isEffectivelyOverdue = inv.bucket !== null
+        if (statusFilter === 'OVERDUE' && !isEffectivelyOverdue) return false
+        if (statusFilter !== 'ALL' && statusFilter !== 'OVERDUE' && inv.status !== statusFilter) return false
         if (bucketFilter !== 'ALL') {
-          if (bucketFilter === 'CURRENT') return inv.status !== 'OVERDUE'
+          if (bucketFilter === 'CURRENT') return !isEffectivelyOverdue
           if (inv.bucket !== bucketFilter) return false
         }
         if (clientFilter && inv.clientRuc !== clientFilter) return false
@@ -302,8 +334,10 @@ export default function CxCReportPage() {
       })
   }, [enriched, search, statusFilter, bucketFilter, clientFilter, dateFrom, dateTo, sortKey, sortDir])
 
-  const filteredTotal   = filtered.reduce((s, i) => s + i.balance, 0)
-  const filteredOverdue = filtered.filter((i) => i.status === 'OVERDUE')
+  const filteredTotalPen  = filtered.filter(i => i.currency !== 'USD').reduce((s, i) => s + i.balance, 0)
+  const filteredTotalUsd  = filtered.filter(i => i.currency === 'USD').reduce((s, i) => s + (i.balanceUsd ?? 0), 0)
+  const filteredTotal     = filteredTotalPen  // kept for compat
+  const filteredOverdue   = filtered.filter((i) => i.status === 'OVERDUE')
 
   // ── Pagination derived ─────────────────────────────────────────────────────
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
@@ -406,32 +440,54 @@ export default function CxCReportPage() {
             <ExportMenu
               title="CxC — Cuentas por Cobrar — FlotaTrack"
               filename="cuentas-por-cobrar"
-              csvRows={filtered.map((inv) => ({
-                'Factura': `${inv.series}-${inv.number.padStart(8, '0')}`,
-                'Cliente': inv.clientName, 'RUC': inv.clientRuc,
-                'Vencimiento': fmtD(inv.dueDate),
-                'Mora (días)': inv.days || 0,
-                'Total (S/)': inv.total.toFixed(2), 'Cobrado (S/)': inv.paid.toFixed(2),
-                'Saldo (S/)': inv.balance.toFixed(2),
-                'Estado': inv.status === 'OVERDUE' ? 'Vencida' : inv.status === 'PARTIAL' ? 'Parcial' : 'Pendiente',
-              }))}
+              csvRows={filtered.map((inv) => {
+                const isUsd = inv.currency === 'USD' && inv.totalUsd != null
+                return {
+                  'Factura':    `${inv.series}-${inv.number.padStart(8, '0')}`,
+                  'Cliente':    inv.clientName, 'RUC': inv.clientRuc,
+                  'Moneda':     inv.currency,
+                  'Vencimiento': fmtD(inv.dueDate),
+                  'Mora (días)': inv.days || 0,
+                  'Total':      isUsd ? `$ ${inv.totalUsd!.toFixed(2)}` : `S/ ${inv.total.toFixed(2)}`,
+                  'TC':         isUsd && inv.tcambio ? inv.tcambio.toFixed(3) : '',
+                  'Cobrado':    isUsd && inv.balanceUsd != null
+                                  ? `$ ${(inv.totalUsd! - inv.balanceUsd).toFixed(2)}`
+                                  : `S/ ${inv.paid.toFixed(2)}`,
+                  'Saldo':      isUsd && inv.balanceUsd != null
+                                  ? `$ ${inv.balanceUsd.toFixed(2)}`
+                                  : `S/ ${inv.balance.toFixed(2)}`,
+                  'Detrac.':    inv.detraccion > 0 ? `S/ ${inv.detraccion.toFixed(2)}` : 'No',
+                  'Estado':     inv.status === 'OVERDUE' ? 'Vencida' : inv.status === 'PARTIAL' ? 'Parcial' : 'Pendiente',
+                }
+              })}
             />
           </div>
         </div>
 
         {/* KPIs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
-          {[
-            { label: 'Total facturas pendientes', value: String(enriched.length),    color: 'var(--clr-text)' },
-            { label: 'Saldo total pendiente',     value: fmtK(totalPending),         color: '#d97706' },
-            { label: 'Total vencido',             value: fmtK(totalOverdue),         color: 'var(--clr-danger)' },
-            { label: 'Facturas vencidas',         value: String(overdueItems.length),color: 'var(--clr-danger)' },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '14px 16px' }}>
-              <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>{label}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color }}>{value}</div>
-            </div>
-          ))}
+          {/* Total facturas */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Total facturas pendientes</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--clr-text)' }}>{enriched.length}</div>
+          </div>
+          {/* Saldo total pendiente — dual currency */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Saldo total pendiente</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#d97706' }}>{fmtK(totalPendingPen)}</div>
+            {totalPendingUsd > 0 && <div style={{ fontSize: 13, fontWeight: 600, color: '#1d4ed8', marginTop: 3 }}>{fmtUsdK(totalPendingUsd)}</div>}
+          </div>
+          {/* Total vencido — dual currency */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Total vencido</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--clr-danger)' }}>{fmtK(totalOverduePen)}</div>
+            {totalOverdueUsd > 0 && <div style={{ fontSize: 13, fontWeight: 600, color: '#b91c1c', marginTop: 3 }}>{fmtUsdK(totalOverdueUsd)}</div>}
+          </div>
+          {/* Facturas vencidas */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Facturas vencidas</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--clr-danger)' }}>{overdueItems.length}</div>
+          </div>
         </div>
 
         {/* Aging buckets */}
@@ -451,9 +507,10 @@ export default function CxCReportPage() {
                     <span style={{ fontSize: 11, fontWeight: 700, color: BUCKET_COLORS[bucket] }}>{bucket} días</span>
                     <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{bdata.count} fact.</span>
                   </div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: BUCKET_COLORS[bucket], marginBottom: 8 }}>{fmtK(bdata.amount)}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: BUCKET_COLORS[bucket], marginBottom: bdata.amountUsd > 0 ? 2 : 8 }}>{fmtK(bdata.amount)}</div>
+                  {bdata.amountUsd > 0 && <div style={{ fontSize: 12, fontWeight: 600, color: '#b91c1c', marginBottom: 8 }}>{fmtUsdK(bdata.amountUsd)}</div>}
                   <div style={{ height: 4, background: 'var(--clr-surface-hover)', borderRadius: 2 }}>
-                    <div style={{ height: '100%', borderRadius: 2, width: `${(bdata.amount / maxBucket) * 100}%`, background: BUCKET_COLORS[bucket] }} />
+                    <div style={{ height: '100%', borderRadius: 2, width: `${((bdata.amount + bdata.amountUsd) / maxBucket) * 100}%`, background: BUCKET_COLORS[bucket] }} />
                   </div>
                 </div>
               ))}
@@ -538,11 +595,8 @@ export default function CxCReportPage() {
           <span style={{ fontSize: 12, color: 'var(--clr-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <Filter size={12} />
             {hasFilters
-              ? <><strong style={{ color: 'var(--clr-text-muted)' }}>{filtered.length}</strong> de {enriched.length} facturas · Saldo: <strong style={{ color: '#d97706' }}>{fmtK(filteredTotal)}</strong></>
-              : <>{enriched.length} facturas · Total: <strong style={{ color: '#d97706' }}>{fmtK(totalPending)}</strong></>
-            }
-            {hasFilters && filteredTotal !== totalPending &&
-              <span style={{ color: 'var(--clr-text-subtle)' }}>· General: {fmtK(totalPending)}</span>
+              ? <><strong style={{ color: 'var(--clr-text-muted)' }}>{filtered.length}</strong> de {enriched.length} facturas · Saldo: <strong style={{ color: '#d97706' }}>{fmtK(filteredTotalPen)}</strong>{filteredTotalUsd > 0 && <><span style={{ color: 'var(--clr-text-subtle)' }}> + </span><strong style={{ color: '#1d4ed8' }}>{fmtUsdK(filteredTotalUsd)}</strong></>}</>
+              : <>{enriched.length} facturas · S/: <strong style={{ color: '#d97706' }}>{fmtK(totalPendingPen)}</strong>{totalPendingUsd > 0 && <><span style={{ color: 'var(--clr-text-subtle)' }}> + $: </span><strong style={{ color: '#1d4ed8' }}>{fmtUsdK(totalPendingUsd)}</strong></>}</>
             }
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -589,12 +643,13 @@ export default function CxCReportPage() {
                     <TH label="Total" col="total" right />
                     <TH label="Cobrado" right />
                     <TH label="Saldo" col="balance" right />
+                    <TH label="Detrac." right />
                     <TH label="Estado" right />
                   </tr>
                 </thead>
                 <tbody>
                   {pageItems.map((inv, i) => {
-                    const isOverdue = inv.status === 'OVERDUE'
+                    const isOverdue = inv.bucket !== null
                     const bColor    = inv.bucket ? BUCKET_COLORS[inv.bucket] : undefined
                     return (
                       <tr key={inv.id} style={{
@@ -604,6 +659,7 @@ export default function CxCReportPage() {
                       }}>
                         <td style={{ padding: '9px 12px', fontFamily: 'monospace', fontWeight: 700, color: 'var(--clr-doc-number)', whiteSpace: 'nowrap' }}>
                           {inv.series}-{inv.number.padStart(8, '0')}
+                          {inv.currency === 'USD' && <span style={{ fontSize: 9, fontWeight: 700, background: '#dbeafe', color: '#1d4ed8', borderRadius: 3, padding: '1px 4px', marginLeft: 5, fontFamily: 'sans-serif' }}>USD</span>}
                         </td>
                         <td title={inv.clientName} style={{ padding: '9px 12px', color: 'var(--clr-text)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {inv.clientName}
@@ -623,12 +679,23 @@ export default function CxCReportPage() {
                             : <span style={{ color: 'var(--clr-text-subtle)' }}>—</span>
                           }
                         </td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--clr-text-muted)' }}>{fmt(inv.total)}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--clr-text-muted)' }}>
+                          {inv.currency === 'USD' && inv.totalUsd ? fmtUsd(inv.totalUsd) : fmt(inv.total)}
+                          {inv.currency === 'USD' && inv.tcambio && <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', fontWeight: 400 }}>TC {inv.tcambio.toFixed(3)}</div>}
+                        </td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', color: inv.paid > 0 ? 'var(--clr-success)' : 'var(--clr-border)' }}>
                           {inv.paid > 0 ? fmt(inv.paid) : '—'}
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, color: isOverdue ? (bColor ?? 'var(--clr-danger)') : '#d97706' }}>
-                          {fmt(inv.balance)}
+                          {inv.currency === 'USD' && inv.balanceUsd != null ? fmtUsd(inv.balanceUsd) : fmt(inv.balance)}
+                        </td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right' }}>
+                          {inv.detraccion > 0
+                            ? <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: '#fef9c3', color: '#854d0e', whiteSpace: 'nowrap' }}>
+                                {fmt(inv.detraccion)}
+                              </span>
+                            : <span style={{ color: 'var(--clr-border)' }}>—</span>
+                          }
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'right' }}>
                           <span style={{
@@ -645,12 +712,14 @@ export default function CxCReportPage() {
                 </tbody>
                 <tfoot>
                   <tr style={{ borderTop: '1px solid var(--clr-border)', background: 'var(--clr-sidebar)' }}>
-                    <td colSpan={7} style={{ padding: '10px 12px', fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600 }}>
+                    <td colSpan={8} style={{ padding: '10px 12px', fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600 }}>
                       Mostrando {pageStart + 1}–{Math.min(pageStart + pageSize, filtered.length)} de {filtered.length} {hasFilters ? '(filtradas)' : 'facturas'}
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', color: '#d97706', fontWeight: 700, fontSize: 13 }}>
-                      {fmt(filteredTotal)}
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, fontSize: 13 }}>
+                      <div style={{ color: '#d97706' }}>{fmtK(filteredTotalPen)}</div>
+                      {filteredTotalUsd > 0 && <div style={{ color: '#1d4ed8', fontSize: 11, marginTop: 2 }}>{fmtUsdK(filteredTotalUsd)}</div>}
                     </td>
+                    <td />
                     <td />
                   </tr>
                 </tfoot>

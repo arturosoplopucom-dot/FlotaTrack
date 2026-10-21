@@ -23,6 +23,9 @@ import { downloadQuotePDF, previewQuotePDFUrl } from '../components/QuotePDF'
 const fmt = (n: number | string) =>
   'S/ ' + Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+const fmtCur = (n: number | string, currency?: string) =>
+  (currency === 'USD' ? '$ ' : 'S/ ') + Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 const fmtDate = (iso: string) =>
   format(parseISO(iso), 'dd MMM yyyy', { locale: es })
 
@@ -43,10 +46,9 @@ const STATUS_DOT_Q: Record<QuoteStatus, string> = {
 }
 
 // ─── QuoteForm types ──────────────────────────────────────────────────────────
-type ItemForm = { description: string; quantity: string; unitPrice: string }
+type ItemForm = { equipmentId: string; description: string; quantity: string; unitPrice: string }
 type QuoteForm = {
   clientId: string
-  equipmentId: string
   validUntil: string
   currency: 'PEN' | 'USD'
   notes: string
@@ -62,16 +64,8 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
   const update = useUpdateQuote()
 
   const [clientId, setClientId]       = useState(quote?.clientId ?? '')
-  const [equipmentId, setEquipmentId] = useState(quote?.equipmentId ?? preselectedEquipmentId ?? '')
-  const [error, setError]           = useState('')
-
-  // Sesión de mantenimiento activa del equipo seleccionado
-  const activeSession = equipmentId
-    ? activeSessions.find((s) => s.equipmentId === equipmentId) ?? null
-    : null
-  // Fallback: equipo con status MAINTENANCE pero sin sesión registrada
-  const selectedEquip = equipment.find((e) => e.id === equipmentId)
-  const isInMaintenance = activeSession !== null || selectedEquip?.status === 'MAINTENANCE'
+  const [billingType, setBillingType] = useState<'HOURLY' | 'DAILY'>('HOURLY')
+  const [error, setError]             = useState('')
 
   const defaultValidUntil = quote?.validUntil
     ? quote.validUntil.slice(0, 10)
@@ -79,44 +73,82 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
 
   const { register, control, handleSubmit, watch, setValue } = useForm<QuoteForm>({
     defaultValues: {
-      clientId:    quote?.clientId ?? '',
-      equipmentId: quote?.equipmentId ?? preselectedEquipmentId ?? '',
-      validUntil:  defaultValidUntil,
-      currency:    quote?.currency ?? 'PEN',
-      notes:       quote?.notes ?? '',
+      clientId:   quote?.clientId ?? '',
+      validUntil: defaultValidUntil,
+      currency:   quote?.currency ?? 'PEN',
+      notes:      quote?.notes ?? '',
       items: quote?.items.map((i) => ({
+        equipmentId: i.equipmentId ?? '',
         description: i.description,
         quantity:    String(i.quantity),
         unitPrice:   String(i.unitPrice),
-      })) ?? [{ description: '', quantity: '1', unitPrice: '0' }],
+      })) ?? [{
+        equipmentId: preselectedEquipmentId ?? '',
+        description: '',
+        quantity:    '1',
+        unitPrice:   '0',
+      }],
     },
   })
 
-  // Auto-populate primera línea con el nombre del equipo preseleccionado
+  function getEquipRate(eq: Equipment, cur: 'PEN' | 'USD', billing: 'HOURLY' | 'DAILY'): number | null {
+    const raw = billing === 'DAILY'
+      ? (cur === 'USD' ? eq.dailyRateUsd  : eq.dailyRatePen)
+      : (cur === 'USD' ? eq.hourlyRateUsd : eq.hourlyRatePen)
+    if (raw == null) return null
+    const n = parseFloat(String(raw))
+    return isNaN(n) ? null : n
+  }
+
+  // Auto-populate primera línea cuando hay equipo preseleccionado
   useEffect(() => {
     if (!preselectedEquipmentId || quote) return
     const eq = equipment.find((e) => e.id === preselectedEquipmentId)
-    if (eq) setValue('items.0.description' as any, eq.name)
+    if (!eq) return
+    setValue('items.0.description' as any, eq.name)
+    const rate = getEquipRate(eq, watch('currency'), billingType)
+    if (rate !== null) setValue('items.0.unitPrice' as any, String(rate))
   }, [preselectedEquipmentId, equipment])
+
+  function handleItemEquipmentChange(idx: number, id: string) {
+    setValue(`items.${idx}.equipmentId` as any, id)
+    if (!id) return
+    const eq = equipment.find((e) => e.id === id)
+    if (!eq) return
+    const rate = getEquipRate(eq, watch('currency'), billingType)
+    if (rate !== null) setValue(`items.${idx}.unitPrice` as any, String(rate))
+    const curDesc = watch(`items.${idx}.description` as any)
+    if (!curDesc) setValue(`items.${idx}.description` as any, eq.name)
+  }
 
   const { fields, append, remove } = useFieldArray({ control, name: 'items' })
   const items = watch('items')
   const currency = watch('currency')
+  const sym = currency === 'PEN' ? 'S/' : '$'
+
+  // Alerta de mantenimiento: cualquier equipo seleccionado en mantenimiento
+  const itemEquipIds = items.map(i => i.equipmentId).filter(Boolean)
+  const maintenanceWarnings = itemEquipIds.flatMap(eqId => {
+    const sess = activeSessions.find(s => s.equipmentId === eqId)
+    const eq   = equipment.find(e => e.id === eqId)
+    if (sess || eq?.status === 'MAINTENANCE') return [{ eq, sess }]
+    return []
+  })
 
   const subtotal = items.reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.unitPrice) || 0), 0)
   const igv = subtotal * 0.18
   const total = subtotal + igv
-  const sym = currency === 'PEN' ? 'S/' : '$'
 
   const clientItems = clients.map((c) => ({ id: c.id, primary: c.businessName, secondary: c.ruc }))
   const equipItems  = [
-    { id: '', primary: 'Sin equipo', secondary: 'Cotización general' },
+    { id: '', primary: 'Sin equipo', secondary: '' },
     ...equipment.map((e) => ({ id: e.id, primary: e.name, secondary: e.type })),
   ]
 
   const onSubmit = async (data: QuoteForm) => {
     if (!clientId) { setError('Selecciona un cliente'); return }
     const parsedItems = data.items.map((it, idx) => ({
+      equipmentId: it.equipmentId || undefined,
       description: it.description,
       quantity:    parseFloat(it.quantity) || 1,
       unitPrice:   parseFloat(it.unitPrice) || 0,
@@ -127,11 +159,10 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
 
     const payload = {
       clientId,
-      equipmentId: equipmentId || undefined,
-      validUntil:  data.validUntil,
-      currency:    data.currency,
-      notes:       data.notes || undefined,
-      items:       parsedItems,
+      validUntil: data.validUntil,
+      currency:   data.currency,
+      notes:      data.notes || undefined,
+      items:      parsedItems,
     }
 
     if (quote) await update.mutateAsync({ id: quote.id, ...payload })
@@ -171,15 +202,19 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
             onChange={setClientId}
           />
 
-          {/* Equipo + Fecha + Moneda */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr) minmax(0,1fr)', gap: 12 }}>
-            <SearchableDropdown
-              label="Equipo (opcional)"
-              placeholder="Buscar equipo..."
-              items={equipItems}
-              value={equipmentId}
-              onChange={setEquipmentId}
-            />
+          {/* Tipo tarifa + Fecha + Moneda */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: 12 }}>
+            <div>
+              <label style={labelSt}>Tipo de tarifa</label>
+              <select
+                value={billingType}
+                onChange={e => setBillingType(e.target.value as 'HOURLY' | 'DAILY')}
+                style={inpStyle}
+              >
+                <option value="HOURLY">Por hora</option>
+                <option value="DAILY">Por día</option>
+              </select>
+            </div>
             <div>
               <label style={labelSt}>Válida hasta *</label>
               <input type="date" {...register('validUntil', { required: true })} style={inpStyle} />
@@ -193,45 +228,29 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
             </div>
           </div>
 
-          {/* Alerta: equipo en mantenimiento */}
-          {isInMaintenance && (
-            <div style={{
+          {/* Alertas mantenimiento */}
+          {maintenanceWarnings.map(({ eq, sess }, wi) => eq && (
+            <div key={wi} style={{
               display: 'flex', gap: 12, alignItems: 'flex-start',
               background: 'rgba(234,88,12,0.1)', border: '1px solid rgba(234,88,12,0.35)',
               borderRadius: 10, padding: '12px 14px',
             }}>
-              <div style={{ width: 34, height: 34, borderRadius: 9, background: 'rgba(234,88,12,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <Wrench size={16} color="var(--clr-orange)" />
-              </div>
+              <Wrench size={16} color="var(--clr-orange)" style={{ flexShrink: 0, marginTop: 2 }} />
               <div style={{ flex: 1 }}>
                 <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: 'var(--clr-orange)' }}>
-                  Equipo en mantenimiento
+                  {eq.name} — en mantenimiento
                 </p>
-                {activeSession ? (
-                  <>
-                    <p style={{ margin: '4px 0 0', fontSize: 11, color: '#d97706' }}>
-                      {activeSession.workDescription ?? 'Mantenimiento en curso'}
-                      {activeSession.technician && ` · ${activeSession.technician}`}
-                    </p>
-                    <p style={{ margin: '6px 0 0', fontSize: 11, color: '#d97706', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Timer size={10} />
-                      {activeSession.estimatedEnd
-                        ? <>Disponible estimado: <strong style={{ color: '#d97706', marginLeft: 3 }}>{format(new Date(activeSession.estimatedEnd), 'dd MMM yyyy', { locale: es })}</strong></>
-                        : 'Sin fecha estimada de disponibilidad'}
-                    </p>
-                    <p style={{ margin: '4px 0 0', fontSize: 10, color: '#d97706' }}>
-                      Puedes cotizar con este equipo, pero considera que podría no estar disponible en la fecha acordada.
-                    </p>
-                  </>
-                ) : (
+                {sess ? (
                   <p style={{ margin: '4px 0 0', fontSize: 11, color: '#d97706' }}>
-                    El equipo está marcado como en mantenimiento. Verifica disponibilidad antes de confirmar la cotización.
+                    {sess.workDescription ?? 'Mantenimiento en curso'}
+                    {sess.estimatedEnd && <> · Disponible: <strong>{format(new Date(sess.estimatedEnd), 'dd MMM yyyy', { locale: es })}</strong></>}
                   </p>
+                ) : (
+                  <p style={{ margin: '4px 0 0', fontSize: 11, color: '#d97706' }}>Verifica disponibilidad antes de confirmar.</p>
                 )}
               </div>
-              <AlertTriangle size={14} color="var(--clr-orange)" style={{ flexShrink: 0, marginTop: 2 }} />
             </div>
-          )}
+          ))}
 
           {/* Ítems */}
           <div>
@@ -239,7 +258,7 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
               <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--clr-text-muted)' }}>Líneas de servicio *</label>
               <button
                 type="button"
-                onClick={() => append({ description: '', quantity: '1', unitPrice: '0' })}
+                onClick={() => append({ equipmentId: '', description: '', quantity: '1', unitPrice: '0' })}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--clr-primary)', background: 'none', border: 'none', cursor: 'pointer' }}
               >
                 <Plus size={12} /> Agregar línea
@@ -248,8 +267,9 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {/* Cabecera */}
-              <div style={{ display: 'grid', gridTemplateColumns: '6fr 2fr 3fr 1fr', gap: 4, fontSize: 11, color: 'var(--clr-text-subtle)', padding: '0 4px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '5fr 4fr 2fr 3fr 1fr', gap: 4, fontSize: 11, color: 'var(--clr-text-subtle)', padding: '0 4px' }}>
                 <span>Descripción</span>
+                <span>Equipo</span>
                 <span style={{ textAlign: 'right' }}>Cant.</span>
                 <span style={{ textAlign: 'right' }}>P. Unit.</span>
                 <span />
@@ -257,40 +277,52 @@ function QuoteModal({ quote, preselectedEquipmentId, onClose }: { quote?: Quote;
 
               {fields.map((field, idx) => {
                 const rowTotal = (parseFloat(items[idx]?.quantity) || 0) * (parseFloat(items[idx]?.unitPrice) || 0)
+                const selEqId  = watch(`items.${idx}.equipmentId` as any) as string
                 return (
-                  <div key={field.id} style={{ display: 'grid', gridTemplateColumns: '6fr 2fr 3fr 1fr', gap: 4, alignItems: 'center', background: 'var(--clr-bg)', borderRadius: 8, padding: 8 }}>
-                    <input
-                      {...register(`items.${idx}.description`)}
-                      placeholder="Descripción del servicio"
-                      style={{ ...inpSm, gridColumn: '1' }}
-                    />
-                    <input
-                      {...register(`items.${idx}.quantity`)}
-                      type="number" step="1" min="1"
-                      placeholder="1"
-                      style={{ ...inpSm, textAlign: 'right' }}
-                    />
-                    <div style={{ position: 'relative' }}>
-                      <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--clr-text-subtle)', pointerEvents: 'none' }}>{sym}</span>
+                  <div key={field.id} style={{ background: 'var(--clr-bg)', borderRadius: 8, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '5fr 4fr 2fr 3fr 1fr', gap: 4, alignItems: 'center' }}>
                       <input
-                        {...register(`items.${idx}.unitPrice`)}
-                        type="number" step="0.01" min="0"
-                        placeholder="0.00"
-                        style={{ ...inpSm, width: '100%', boxSizing: 'border-box', paddingLeft: 20, textAlign: 'right' }}
+                        {...register(`items.${idx}.description`)}
+                        placeholder="Descripción del servicio"
+                        style={inpSm}
                       />
+                      <select
+                        value={selEqId}
+                        onChange={e => handleItemEquipmentChange(idx, e.target.value)}
+                        style={{ ...inpSm, color: selEqId ? 'var(--clr-text)' : 'var(--clr-text-subtle)' }}
+                      >
+                        {equipItems.map(eq => (
+                          <option key={eq.id} value={eq.id}>{eq.primary}</option>
+                        ))}
+                      </select>
+                      <input
+                        {...register(`items.${idx}.quantity`)}
+                        type="number" step="1" min="1"
+                        placeholder="1"
+                        style={{ ...inpSm, textAlign: 'right' }}
+                      />
+                      <div style={{ position: 'relative' }}>
+                        <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--clr-text-subtle)', pointerEvents: 'none' }}>{sym}</span>
+                        <input
+                          {...register(`items.${idx}.unitPrice`)}
+                          type="number" step="0.01" min="0"
+                          placeholder="0.00"
+                          style={{ ...inpSm, width: '100%', boxSizing: 'border-box', paddingLeft: 20, textAlign: 'right' }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => fields.length > 1 && remove(idx)}
+                        disabled={fields.length === 1}
+                        style={{ display: 'flex', justifyContent: 'center', background: 'none', border: 'none', cursor: fields.length === 1 ? 'default' : 'pointer', color: 'var(--clr-text-subtle)', opacity: fields.length === 1 ? 0.3 : 1 }}
+                        onMouseEnter={(e) => { if (fields.length > 1) e.currentTarget.style.color = 'var(--clr-danger)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--clr-text-subtle)' }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => fields.length > 1 && remove(idx)}
-                      disabled={fields.length === 1}
-                      style={{ display: 'flex', justifyContent: 'center', background: 'none', border: 'none', cursor: fields.length === 1 ? 'default' : 'pointer', color: 'var(--clr-text-subtle)', opacity: fields.length === 1 ? 0.3 : 1 }}
-                      onMouseEnter={(e) => { if (fields.length > 1) e.currentTarget.style.color = 'var(--clr-danger)' }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--clr-text-subtle)' }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
                     {rowTotal > 0 && (
-                      <div style={{ gridColumn: '1 / -1', textAlign: 'right', fontSize: 11, color: 'var(--clr-text-subtle)', paddingRight: 24 }}>
+                      <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--clr-text-subtle)', paddingRight: 24 }}>
                         = {sym} {rowTotal.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     )}
@@ -435,14 +467,15 @@ export default function QuotesPage() {
   }
 
   const buildShareText = (q: Quote) => {
+    const sym = q.currency === 'USD' ? '$ ' : 'S/ '
     const lines = q.items.map((it, i) =>
-      `  ${i + 1}. ${it.description} — ${it.quantity} x S/ ${Number(it.unitPrice).toFixed(2)}`
+      `  ${i + 1}. ${it.description} — ${it.quantity} x ${sym}${Number(it.unitPrice).toFixed(2)}`
     ).join('\n')
     return (
       `Estimado(a) *${q.client.businessName}*,\n\n` +
       `Adjuntamos la cotización *${q.number}* de Gruas Omega S.A.C.\n\n` +
       `📋 *Detalle:*\n${lines}\n\n` +
-      `💰 *Total (inc. IGV):* S/ ${Number(q.total).toFixed(2)}\n` +
+      `💰 *Total (inc. IGV):* ${sym}${Number(q.total).toFixed(2)}\n` +
       `📅 *Válida hasta:* ${fmtDate(q.validUntil)}\n\n` +
       `Quedamos atentos a su confirmación.`
     )
@@ -496,7 +529,7 @@ export default function QuotesPage() {
             <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)', margin: 0 }}>Cotizaciones</h1>
             <p style={{ fontSize: 13, color: 'var(--clr-text-subtle)', marginTop: 4 }}>
               {quotes.length} cotizaciones · {kpiSent} enviadas · {kpiApproved} aprobadas
-              {totalApproved > 0 && <> · {fmt(totalApproved)} aprobado</>}
+              {totalApproved > 0 && <> · {fmt(totalApproved)} aprobado</>}{/* note: mixed currencies possible; fmt ok here as summary */}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -609,7 +642,7 @@ export default function QuotesPage() {
                       )}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>{fmt(q.total)}</div>
+                      <div style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>{fmtCur(q.total, q.currency)}</div>
                       <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 2 }}>Total con IGV</div>
                     </div>
                   </div>
@@ -677,12 +710,12 @@ export default function QuotesPage() {
                         }}
                         style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'var(--clr-violet-bg)', color: 'var(--clr-violet)', border: '1px solid var(--clr-violet-border)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
                       >
-                        <ClipboardList size={11} /> Crear Orden de Trabajo
+                        <ClipboardList size={11} /> Crear Liquidación
                       </button>
                     )}
                     {q.status === 'CONVERTED' && (
                       <span style={{ fontSize: 11, color: 'var(--clr-violet)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <CheckCircle size={11} /> Convertida en OT {q.workOrder && `— ${q.workOrder.number}`}
+                        <CheckCircle size={11} /> Convertida en Liquidación {q.workOrder && `— ${q.workOrder.number}`}
                       </span>
                     )}
                     {q.status === 'REJECTED' && (
@@ -889,15 +922,22 @@ export default function QuotesPage() {
                 {detailQuote.client.phone && <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>Tel: {detailQuote.client.phone}</div>}
               </div>
               <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Equipo</div>
-                {detailQuote.equipment ? (
-                  <>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--clr-text)', marginBottom: 2 }}>{detailQuote.equipment.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{detailQuote.equipment.type}</div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: 12, color: 'var(--clr-text-subtle)' }}>Cotización general</div>
-                )}
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Equipos</div>
+                {(() => {
+                  const equipos = detailQuote.items
+                    .filter(i => i.equipment)
+                    .map(i => i.equipment!)
+                    .filter((eq, idx, arr) => arr.findIndex(e => e.name === eq.name) === idx)
+                  if (equipos.length === 0) {
+                    return <div style={{ fontSize: 12, color: 'var(--clr-text-subtle)' }}>Cotización general</div>
+                  }
+                  return equipos.map((eq, i) => (
+                    <div key={i} style={{ marginBottom: i < equipos.length - 1 ? 6 : 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--clr-text)', marginBottom: 1 }}>{eq.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{eq.type}</div>
+                    </div>
+                  ))
+                })()}
               </div>
             </div>
 
@@ -907,15 +947,15 @@ export default function QuotesPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <CheckCircle size={15} style={{ color: 'var(--clr-violet)', flexShrink: 0 }} />
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-violet)' }}>Convertida en Orden de Trabajo</div>
-                    <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 1 }}>Esta cotización originó la OT <strong style={{ color: 'var(--clr-violet)' }}>{detailQuote.workOrder.number}</strong></div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-violet)' }}>Convertida en Liquidación</div>
+                    <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 1 }}>Esta cotización originó la Liquidación <strong style={{ color: 'var(--clr-violet)' }}>{detailQuote.workOrder.number}</strong></div>
                   </div>
                 </div>
                 <button
                   onClick={() => { setDetailQuote(null); navigate('/workorders', { state: { highlightId: detailQuote.workOrder!.id } }) }}
                   style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'var(--clr-violet)', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', flexShrink: 0 }}
                 >
-                  <ClipboardList size={11} /> Ver OT
+                  <ClipboardList size={11} /> Ver Liquidación
                 </button>
               </div>
             )}
@@ -924,15 +964,16 @@ export default function QuotesPage() {
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>Líneas de servicio</div>
               <div style={{ border: '1px solid var(--clr-border)', borderRadius: 8, overflow: 'hidden' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '4fr 1fr 1fr 1fr', gap: 0, background: 'var(--clr-bg)', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                  <span>Descripción</span><span style={{ textAlign: 'right' }}>Cant.</span><span style={{ textAlign: 'right' }}>P.Unit.</span><span style={{ textAlign: 'right' }}>Total</span>
+                <div style={{ display: 'grid', gridTemplateColumns: '4fr 2fr 1fr 1fr 1fr', gap: 0, background: 'var(--clr-bg)', padding: '8px 12px', fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <span>Descripción</span><span>Equipo</span><span style={{ textAlign: 'right' }}>Cant.</span><span style={{ textAlign: 'right' }}>P.Unit.</span><span style={{ textAlign: 'right' }}>Total</span>
                 </div>
                 {detailQuote.items.map((item, idx) => (
-                  <div key={item.id} style={{ display: 'grid', gridTemplateColumns: '4fr 1fr 1fr 1fr', gap: 0, padding: '10px 12px', fontSize: 12, color: 'var(--clr-text)', borderTop: idx > 0 ? '1px solid var(--clr-border)' : 'none', background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
+                  <div key={item.id} style={{ display: 'grid', gridTemplateColumns: '4fr 2fr 1fr 1fr 1fr', gap: 0, padding: '10px 12px', fontSize: 12, color: 'var(--clr-text)', borderTop: idx > 0 ? '1px solid var(--clr-border)' : 'none', background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
                     <span>{item.description}</span>
+                    <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)' }}>{item.equipment?.name ?? '—'}</span>
                     <span style={{ textAlign: 'right', color: 'var(--clr-text-muted)' }}>{Number(item.quantity).toFixed(2)}</span>
-                    <span style={{ textAlign: 'right', color: 'var(--clr-text-muted)' }}>S/ {Number(item.unitPrice).toFixed(2)}</span>
-                    <span style={{ textAlign: 'right', fontWeight: 600, color: 'var(--clr-text)' }}>S/ {Number(item.total).toFixed(2)}</span>
+                    <span style={{ textAlign: 'right', color: 'var(--clr-text-muted)' }}>{fmtCur(item.unitPrice, detailQuote.currency)}</span>
+                    <span style={{ textAlign: 'right', fontWeight: 600, color: 'var(--clr-text)' }}>{fmtCur(item.total, detailQuote.currency)}</span>
                   </div>
                 ))}
               </div>
@@ -941,13 +982,13 @@ export default function QuotesPage() {
             {/* Totales */}
             <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '14px 16px', marginBottom: detailQuote.notes ? 16 : 20 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
-                <span>Subtotal</span><span>S/ {Number(detailQuote.subtotal).toFixed(2)}</span>
+                <span>Subtotal</span><span>{fmtCur(detailQuote.subtotal, detailQuote.currency)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--clr-text-muted)', marginBottom: 10 }}>
-                <span>IGV 18%</span><span>S/ {Number(detailQuote.igv).toFixed(2)}</span>
+                <span>IGV 18%</span><span>{fmtCur(detailQuote.igv, detailQuote.currency)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, color: 'var(--clr-text)', paddingTop: 10, borderTop: '1px solid var(--clr-border)' }}>
-                <span>Total</span><span>S/ {Number(detailQuote.total).toFixed(2)}</span>
+                <span>Total</span><span>{fmtCur(detailQuote.total, detailQuote.currency)}</span>
               </div>
             </div>
 

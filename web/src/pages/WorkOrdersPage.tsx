@@ -25,10 +25,14 @@ import { useEquipment, useOperators } from '../hooks/useFlota'
 import { api } from '../lib/api'
 import AppShell from '../components/AppShell'
 import { downloadWorkOrderPDF, generatePDFBlob, previewWorkOrderPDFUrl } from '../components/WorkOrderPDF'
+import { exportLiquidacionDetallada } from '../components/LiquidacionDetalladaPDF'
 import { downloadInvoicePDFLocal } from '../components/InvoicePDF'
 
 const fmt = (n: number) =>
   'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+const fmtCur = (n: number, currency: string) =>
+  (currency === 'USD' ? '$ ' : 'S/ ') + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 type StatusCfg = { badgeBg: string; badgeColor: string; label: string; icon: typeof Clock }
 
@@ -88,8 +92,8 @@ function SendClientModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }
   const total = (Number(wo.subtotal) + extraCosts) * 1.18
 
   const plainText =
-    `Hola, adjunto la Orden de Trabajo ${wo.number}.\n\n` +
-    `Servicio: ${wo.description ?? wo.equipment.name}\n` +
+    `Hola, adjunto la Liquidación ${wo.number}.\n\n` +
+    `Servicio: ${wo.description ?? wo.equipment?.name ?? ''}\n` +
     `Ubicación: ${wo.location ?? '-'}\n` +
     `Fecha: ${format(parseISO(wo.startDate), 'dd/MM/yyyy', { locale: es })}` +
     (wo.endDate ? ` al ${format(parseISO(wo.endDate), 'dd/MM/yyyy', { locale: es })}` : '') + `\n` +
@@ -181,7 +185,7 @@ function SendClientModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }
           <Download size={12} style={{ marginTop: 1, flexShrink: 0 }} />
           <span>
             Al hacer clic en <strong>WhatsApp</strong> se descargarán
-            {wo.invoice ? <> el PDF de la OT y la <strong>factura SUNAT {wo.invoice.series}-{wo.invoice.number}</strong></> : ' el PDF de la OT'} automáticamente. Adjúntalos en la conversación antes de enviar.
+            {wo.invoice ? <> el PDF de la Liquidación y la <strong>factura SUNAT {wo.invoice.series}-{wo.invoice.number}</strong></> : ' el PDF de la Liquidación'} automáticamente. Adjúntalos en la conversación antes de enviar.
           </span>
         </div>
 
@@ -221,10 +225,12 @@ function LinkInvoiceModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void 
   const [selected, setSelected]   = useState<string>('')
   const [showAll, setShowAll]     = useState(false)
 
-  const extraCosts = wo.costs.reduce((s, c) => s + Number(c.amount), 0)
+  const woCurrency   = (wo as any).currency as string ?? 'PEN'
+  const curSymbol    = woCurrency === 'USD' ? '$' : 'S/'
+  const extraCosts   = wo.costs.reduce((s, c) => s + Number(c.amount), 0)
   const subtotalBase = Number(wo.subtotal) + extraCosts
   // IGV calculado igual que SUNAT: separado y redondeado a 2 decimales
-  const igvSunat     = Math.round(subtotalBase * 0.18 * 100) / 100
+  const igvSunat      = Math.round(subtotalBase * 0.18 * 100) / 100
   const expectedTotal = Math.round((subtotalBase + igvSunat) * 100) / 100
 
   const { data: invoices = [], isLoading } = useQuery<AvailableInvoice[]>({
@@ -232,9 +238,12 @@ function LinkInvoiceModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void 
     queryFn: () => api.get(`/workorders/${wo.id}/available-invoices`).then((r) => r.data),
   })
 
-  // Tolerancia S/ 1.00 — cubre cualquier redondeo SUNAT sin ser permisivo en exceso
+  // Filtrar por moneda coincidente + tolerancia de redondeo (1 unidad de la moneda)
   const TOLERANCE = 1.00
-  const matches   = invoices.filter((inv) => Math.abs(Number(inv.total) - expectedTotal) <= TOLERANCE)
+  const invAmount = (inv: AvailableInvoice) =>
+    woCurrency === 'USD' && inv.totalUsd != null ? Number(inv.totalUsd) : Number(inv.total)
+  const sameCurrency = invoices.filter((inv) => (inv as any).currency === woCurrency || !(inv as any).currency)
+  const matches   = sameCurrency.filter((inv) => Math.abs(invAmount(inv) - expectedTotal) <= TOLERANCE)
   const visible   = showAll ? invoices : matches
   const hasHidden = invoices.length > matches.length
 
@@ -259,15 +268,15 @@ function LinkInvoiceModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void 
         <div style={{ background: 'var(--clr-sidebar)', border: '1px solid var(--clr-border)', borderRadius: 8, padding: '10px 14px', fontSize: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <span style={{ color: 'var(--clr-text-subtle)' }}>{wo.number} — Subtotal OT</span>
-            <span style={{ color: 'var(--clr-text-muted)' }}>{fmt(subtotalBase)}</span>
+            <span style={{ color: 'var(--clr-text-muted)' }}>{fmtCur(subtotalBase, woCurrency)}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <span style={{ color: 'var(--clr-text-subtle)' }}>IGV 18% (cálculo SUNAT)</span>
-            <span style={{ color: 'var(--clr-text-muted)' }}>{fmt(igvSunat)}</span>
+            <span style={{ color: 'var(--clr-text-muted)' }}>{fmtCur(igvSunat, woCurrency)}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--clr-border)', paddingTop: 6 }}>
             <span style={{ color: 'var(--clr-text-muted)', fontWeight: 600 }}>Total esperado (incl. IGV)</span>
-            <span style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 14 }}>{fmt(expectedTotal)}</span>
+            <span style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 14 }}>{fmtCur(expectedTotal, woCurrency)}</span>
           </div>
         </div>
 
@@ -284,7 +293,7 @@ function LinkInvoiceModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void 
             {matches.length === 0 && !showAll ? (
               <div style={{ background: 'rgba(217,119,6,0.10)', border: '1px solid rgba(217,119,6,0.30)', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <p style={{ margin: 0, fontSize: 13, color: '#d97706', fontWeight: 500 }}>
-                  Ninguna factura coincide con S/ {expectedTotal.toFixed(2)} (±S/ {TOLERANCE.toFixed(2)}).
+                  Ninguna factura coincide con {curSymbol} {expectedTotal.toFixed(2)} (±{curSymbol} {TOLERANCE.toFixed(2)}).
                 </p>
                 <p style={{ margin: 0, fontSize: 12, color: '#d97706' }}>
                   La tolerancia cubre diferencias de redondeo SUNAT. Si ya emitiste la factura, sincroniza con SIRE e inténtalo nuevamente.
@@ -303,15 +312,16 @@ function LinkInvoiceModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void 
                 <p style={{ margin: 0, fontSize: 12, color: 'var(--clr-text-subtle)' }}>
                   {!showAll
                     ? matches.length === 1
-                      ? 'Factura que coincide con el monto de la OT:'
-                      : `${matches.length} facturas que coinciden con el monto de la OT:`
+                      ? 'Factura que coincide con el monto de la Liquidación:'
+                      : `${matches.length} facturas que coinciden con el monto de la Liquidación:`
                     : `Todas las facturas disponibles del cliente (${invoices.length}):`}
                 </p>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 256, overflowY: 'auto' }}>
                   {visible.map((inv) => {
-                    const net      = Number(inv.total) - Number(inv.detraccion)
-                    const diff     = Math.abs(Number(inv.total) - expectedTotal)
+                    const amt      = invAmount(inv)
+                    const net      = amt - Number(inv.detraccion)
+                    const diff     = Math.abs(amt - expectedTotal)
                     const isExact  = diff < 0.005
                     const isCents  = !isExact && diff <= TOLERANCE
                     const isMatch  = isExact || isCents
@@ -334,18 +344,18 @@ function LinkInvoiceModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void 
                             )}
                             {isCents && (
                               <span style={{ fontSize: 10, background: 'rgba(217,119,6,0.10)', color: '#d97706', border: '1px solid rgba(217,119,6,0.30)', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }} title="Diferencia por redondeo SUNAT — normal">
-                                ±S/ {diff.toFixed(2)} redondeo
+                                ±{curSymbol} {diff.toFixed(2)} redondeo
                               </span>
                             )}
                           </div>
                           <span style={{ fontWeight: 700, color: isMatch ? 'var(--clr-success)' : 'var(--clr-text-subtle)' }}>
-                            {fmt(Number(inv.total))}
+                            {fmtCur(amt, woCurrency)}
                           </span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, fontSize: 11, color: 'var(--clr-text-subtle)' }}>
                           <span>{format(parseISO(inv.issueDate), 'dd/MM/yyyy')}</span>
                           {Number(inv.detraccion) > 0 && (
-                            <span style={{ color: 'var(--clr-orange)' }}>Neto cobrar: {fmt(net)}</span>
+                            <span style={{ color: 'var(--clr-orange)' }}>Neto cobrar: {fmtCur(net, woCurrency)}</span>
                           )}
                         </div>
                       </button>
@@ -393,6 +403,7 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
   const { register, handleSubmit, watch, setValue, formState: { isSubmitting } } = useForm({
     defaultValues: {
       billingType: editingWO?.billingType ?? 'HOURLY',
+      currency: (editingWO?.currency ?? 'PEN') as 'PEN' | 'USD',
       startDate: editingWO?.startDate?.slice(0, 10) ?? format(new Date(), 'yyyy-MM-dd'),
       endDate: editingWO?.endDate?.slice(0, 10) ?? '',
       quantity: editingWO ? Number(editingWO.quantity) : 1,
@@ -423,7 +434,10 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
       setValue('unitRate', Number(item.unitPrice) as any)
     } else if (fromQuote.equipmentId) {
       const eq = (equipment as any[]).find((e: any) => e.id === fromQuote.equipmentId)
-      if (eq && Number(eq.hourlyRate) > 0) setValue('unitRate', Number(eq.hourlyRate) as any)
+      if (eq) {
+        const rate = Number(eq.hourlyRatePen ?? eq.hourlyRateUsd ?? eq.hourlyRate ?? 0)
+        if (rate > 0) setValue('unitRate', rate as any)
+      }
     }
     if (fromQuote.validUntil) setValue('endDate' as any, fromQuote.validUntil.slice(0, 10))
   }, [equipment, fromQuote])
@@ -455,7 +469,20 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
     setValue('equipmentId' as any, id)
     const eq = (equipment as any[]).find(e => e.id === id)
     if (eq) {
-      setValue('unitRate', (billingType === 'HOURLY' ? Number(eq.hourlyRate) : Number(eq.dailyRate)) as any)
+      const cur = watch('currency') as 'PEN' | 'USD'
+      const penRate = billingType === 'HOURLY' ? Number(eq.hourlyRatePen ?? 0) : Number(eq.dailyRatePen ?? 0)
+      const usdRate = billingType === 'HOURLY' ? Number(eq.hourlyRateUsd ?? 0) : Number(eq.dailyRateUsd ?? 0)
+      // Auto-seleccionar moneda según tarifas disponibles
+      if (penRate > 0 && usdRate > 0) {
+        // Ambas disponibles: mantener la moneda actual del form
+      } else if (usdRate > 0 && penRate === 0) {
+        setValue('currency', 'USD')
+      } else if (penRate > 0 && usdRate === 0) {
+        setValue('currency', 'PEN')
+      }
+      const activeCur = (penRate > 0 && usdRate === 0) ? 'PEN' : (usdRate > 0 && penRate === 0) ? 'USD' : cur
+      const rate = activeCur === 'USD' ? usdRate : penRate
+      if (rate > 0) setValue('unitRate', rate as any)
       if (!currentDesc) setValue('description' as any, eq.name)
     }
   }
@@ -494,10 +521,10 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: fromQuote ? 12 : 20 }}>
           <div>
             <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: 'var(--clr-text)' }}>
-              {isEditing ? `Editar ${editingWO!.number}` : 'Nueva Orden de Trabajo'}
+              {isEditing ? `Editar ${editingWO!.number}` : 'Nueva Liquidación'}
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--clr-text-subtle)' }}>
-              {isEditing ? 'Modifica los campos de la orden de trabajo' : 'Completa los campos para registrar la OT'}
+              {isEditing ? 'Modifica los campos de la liquidación' : 'Completa los campos para registrar la liquidación'}
             </p>
           </div>
           <button onClick={onClose}
@@ -573,7 +600,7 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
           </div>
 
           {/* Facturación */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 12 }}>
             <SearchableDropdown
               label="Tipo facturación"
               placeholder="Seleccionar..."
@@ -586,12 +613,33 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
               onChange={(id) => { setValue('billingType', id as any); handleEquipmentSelect(equipmentId) }}
             />
             <div>
+              <label style={labelSt}>Moneda</label>
+              <select
+                value={watch('currency')}
+                onChange={(e) => {
+                  setValue('currency', e.target.value as any)
+                  const cur = e.target.value as 'PEN' | 'USD'
+                  const eq = (equipment as any[]).find(eq => eq.id === equipmentId)
+                  if (eq) {
+                    const penR = billingType === 'HOURLY' ? Number(eq.hourlyRatePen ?? 0) : Number(eq.dailyRatePen ?? 0)
+                    const usdR = billingType === 'HOURLY' ? Number(eq.hourlyRateUsd ?? 0) : Number(eq.dailyRateUsd ?? 0)
+                    const newRate = cur === 'USD' ? usdR : penR
+                    if (newRate > 0) setValue('unitRate', newRate as any)
+                  }
+                }}
+                style={{ ...inpStyle, cursor: 'pointer' }}
+              >
+                <option value="PEN">S/ Soles</option>
+                <option value="USD">$ Dólares</option>
+              </select>
+            </div>
+            <div>
               <label style={labelSt}>{billingUnit[billingType] ?? 'Cant.'} (plan)</label>
               <input {...register('quantity')} type="number" step="0.5" min="0"
                 onChange={(e) => setValue('quantity', e.target.value as any)} style={inpStyle} />
             </div>
             <div>
-              <label style={labelSt}>Tarifa (S/)</label>
+              <label style={labelSt}>Tarifa ({watch('currency') === 'USD' ? '$' : 'S/'})</label>
               <input {...register('unitRate')} type="number" step="0.01"
                 onChange={(e) => setValue('unitRate', e.target.value as any)} style={inpStyle} />
             </div>
@@ -602,15 +650,15 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
             <div style={{ background: 'var(--clr-sidebar)', borderRadius: 12, padding: '12px 16px', border: '1px solid var(--clr-border)', display: 'flex', flexDirection: 'column', gap: 6 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <span style={{ color: 'var(--clr-text-subtle)' }}>Subtotal (sin IGV)</span>
-                <span style={{ color: 'var(--clr-text)', fontWeight: 500 }}>{fmt(subtotal)}</span>
+                <span style={{ color: 'var(--clr-text)', fontWeight: 500 }}>{fmtCur(subtotal, watch('currency'))}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <span style={{ color: 'var(--clr-text-subtle)' }}>IGV 18%</span>
-                <span style={{ color: 'var(--clr-text-muted)' }}>{fmt(Math.round(subtotal * 0.18 * 100) / 100)}</span>
+                <span style={{ color: 'var(--clr-text-muted)' }}>{fmtCur(Math.round(subtotal * 0.18 * 100) / 100, watch('currency'))}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--clr-border)', paddingTop: 6, marginTop: 2 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--clr-text)' }}>Total con IGV</span>
-                <span style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>{fmt(Math.round(subtotal * 1.18 * 100) / 100)}</span>
+                <span style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>{fmtCur(Math.round(subtotal * 1.18 * 100) / 100, watch('currency'))}</span>
               </div>
             </div>
           )}
@@ -651,7 +699,7 @@ function NewWorkOrderModal({ onClose, fromQuote, editingWO }: { onClose: () => v
 
 // ─── OT DETAIL MODAL ──────────────────────────────────────────────────────────
 
-function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) {
+function OTDetailModal({ wo, onClose, initialShowSend }: { wo: WorkOrder; onClose: () => void; initialShowSend?: boolean }) {
   const qc           = useQueryClient()
   const updateStatus = useUpdateWorkOrderStatus()
   const markAccepted = useMarkAccepted()
@@ -664,7 +712,7 @@ function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) 
   const [editingHours, setEditingHours] = useState(false)
   const [costForm, setCostForm]       = useState({ category: 'FUEL', description: '', amount: '' })
   const [addingCost, setAddingCost]   = useState(false)
-  const [showSend, setShowSend]         = useState(false)
+  const [showSend, setShowSend]         = useState(initialShowSend ?? false)
   const [showLink, setShowLink]         = useState(false)
   const [dlInvoice, setDlInvoice]       = useState(false)
   const [dlInvoiceMsg, setDlInvoiceMsg] = useState('')
@@ -714,7 +762,11 @@ function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) 
   const locked = ['BILLED', 'PAID', 'CANCELLED'].includes(wo.status)
 
   const extraCosts  = wo.costs.reduce((s, c) => s + Number(c.amount), 0)
-  const baseSubtotal = Number(actualQty) * Number(wo.unitRate)
+  // Use stored subtotal as the source of truth for neto amount.
+  // For multi-rate liquidaciones, quantity × unitRate gives a wrong figure.
+  const storedSubtotal = Number(wo.subtotal)
+  const isMultiRateDetail = Math.abs(Number(actualQty) * Number(wo.unitRate) - storedSubtotal) > 0.5
+  const baseSubtotal = storedSubtotal
   const totalSinIgv  = baseSubtotal + extraCosts
   const igv          = Math.round(totalSinIgv * 0.18 * 100) / 100
   const totalConIgv  = totalSinIgv + igv
@@ -806,8 +858,8 @@ function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div style={{ ...cardSec, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <InfoRow icon={User} label="Cliente" value={wo.client.businessName} />
-                <InfoRow icon={Truck} label="Equipo" value={wo.equipment.name} />
-                <InfoRow icon={User} label="Operario" value={wo.operator.name} />
+                <InfoRow icon={Truck} label="Equipo" value={wo.equipment?.name ?? '—'} />
+                <InfoRow icon={User} label="Operario" value={wo.operator?.name ?? '—'} />
                 {wo.location && <InfoRow icon={MapPin} label="Ubicación" value={wo.location} />}
               </div>
               <div style={{ ...cardSec, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -853,7 +905,7 @@ function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) 
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <p style={{ fontSize: 11, color: 'var(--clr-text-subtle)', margin: '0 0 4px' }}>Tarifa</p>
-                  <p style={{ fontSize: 17, fontWeight: 700, color: 'var(--clr-text-muted)', margin: 0 }}>{fmt(Number(wo.unitRate))}</p>
+                  <p style={{ fontSize: 17, fontWeight: 700, color: 'var(--clr-text-muted)', margin: 0 }}>{fmtCur(Number(wo.unitRate), (wo as any).currency ?? 'PEN')}</p>
                   <p style={{ fontSize: 11, color: 'var(--clr-text-subtle)', margin: '2px 0 0' }}>por {billingLabels[wo.billingType]}</p>
                 </div>
               </div>
@@ -934,28 +986,31 @@ function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: 'var(--clr-text-subtle)' }}>
-                    Servicio ({actualQty} {billingLabels[wo.billingType]}{Number(actualQty) !== 1 ? 's' : ''} × {fmt(Number(wo.unitRate))})
+                    {isMultiRateDetail
+                      ? `Servicio (${wo.serviceReports?.length ?? 1} reporte${(wo.serviceReports?.length ?? 1) !== 1 ? 's' : ''} — tasas mixtas)`
+                      : `Servicio (${actualQty} ${billingLabels[wo.billingType]}${Number(actualQty) !== 1 ? 's' : ''} × ${fmtCur(Number(wo.unitRate), (wo as any).currency ?? 'PEN')})`
+                    }
                   </span>
-                  <span style={{ color: 'var(--clr-text)' }}>{fmt(baseSubtotal)}</span>
+                  <span style={{ color: 'var(--clr-text)' }}>{fmtCur(baseSubtotal, (wo as any).currency ?? 'PEN')}</span>
                 </div>
                 {wo.costs.map((c) => (
                   <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span style={{ color: 'var(--clr-text-subtle)', paddingLeft: 16 }}>+ {COST_CATEGORIES.find((x) => x.value === c.category)?.label} {c.description ? `(${c.description})` : ''}</span>
-                    <span style={{ color: 'var(--clr-text-muted)' }}>{fmt(Number(c.amount))}</span>
+                    <span style={{ color: 'var(--clr-text-muted)' }}>{fmtCur(Number(c.amount), (wo as any).currency ?? 'PEN')}</span>
                   </div>
                 ))}
                 <div style={{ borderTop: '1px solid var(--clr-border)', paddingTop: 8, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span style={{ color: 'var(--clr-text-subtle)' }}>Subtotal (sin IGV)</span>
-                    <span style={{ color: 'var(--clr-text)' }}>{fmt(totalSinIgv)}</span>
+                    <span style={{ color: 'var(--clr-text)' }}>{fmtCur(totalSinIgv, (wo as any).currency ?? 'PEN')}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                     <span style={{ color: 'var(--clr-text-subtle)' }}>IGV 18%</span>
-                    <span style={{ color: 'var(--clr-text-muted)' }}>{fmt(igv)}</span>
+                    <span style={{ color: 'var(--clr-text-muted)' }}>{fmtCur(igv, (wo as any).currency ?? 'PEN')}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
                     <span style={{ color: 'var(--clr-text)' }}>Total</span>
-                    <span style={{ color: 'var(--clr-text)', fontSize: 17 }}>{fmt(totalConIgv)}</span>
+                    <span style={{ color: 'var(--clr-text)', fontSize: 17 }}>{fmtCur(totalConIgv, (wo as any).currency ?? 'PEN')}</span>
                   </div>
                 </div>
               </div>
@@ -1020,7 +1075,7 @@ function OTDetailModal({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) 
               <button
                 onClick={handleDownloadPDF}
                 disabled={!company}
-                title="Descargar PDF de la OT"
+                title="Descargar PDF de la Liquidación"
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', fontSize: 11, fontWeight: 600, background: 'var(--clr-surface-hover)', color: 'var(--clr-text-muted)', border: '1px solid var(--clr-border)', borderRadius: 10, cursor: !company ? 'not-allowed' : 'pointer', opacity: !company ? 0.4 : 1 }}
               ><Download size={13} /> PDF</button>
               <button onClick={onClose}
@@ -1061,13 +1116,16 @@ type WorkOrderRowProps = {
   onStatusChange: (status: WorkOrderStatus) => void
   onMarkAccepted: () => void
   onPreviewPDF: () => void
+  onSend: () => void
 }
 
-function WorkOrderRow({ wo, company, onOpen, onEdit, onStatusChange, onMarkAccepted, onPreviewPDF }: WorkOrderRowProps) {
+function WorkOrderRow({ wo, company, onOpen, onEdit, onStatusChange, onMarkAccepted, onPreviewPDF, onSend }: WorkOrderRowProps) {
   const dotColor = STATUS_DOT[wo.status] ?? 'var(--clr-text-subtle)'
   const cfg = resolveStatusCfg(wo)
   const extraCosts = wo.costs.reduce((a, c) => a + Number(c.amount), 0)
-  const grandTotal = Number(wo.subtotal) + extraCosts
+  const grandTotal = (Number(wo.subtotal) + extraCosts) * 1.18
+  // When multiple service reports with different rates are grouped, quantity×unitRate ≠ subtotal
+  const isMultiRate = Math.abs(Number(wo.quantity) * Number(wo.unitRate) - Number(wo.subtotal)) > 0.5
 
   return (
     <div style={{
@@ -1093,9 +1151,9 @@ function WorkOrderRow({ wo, company, onOpen, onEdit, onStatusChange, onMarkAccep
           </div>
           <div style={{ color: 'var(--clr-text)', fontSize: 13, fontWeight: 600, marginBottom: 3 }}>{wo.client.businessName}</div>
           <div style={{ color: 'var(--clr-text-subtle)', fontSize: 12, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Truck size={11} /> {wo.equipment.name}</span>
-            <span style={{ color: 'var(--clr-border)' }}>·</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><User size={11} /> {wo.operator.name}</span>
+            {wo.equipment && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><Truck size={11} /> {wo.equipment.name}</span>}
+            {wo.equipment && wo.operator && <span style={{ color: 'var(--clr-border)' }}>·</span>}
+            {wo.operator && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><User size={11} /> {wo.operator.name}</span>}
             {wo.location && (
               <>
                 <span style={{ color: 'var(--clr-border)' }}>·</span>
@@ -1108,13 +1166,13 @@ function WorkOrderRow({ wo, company, onOpen, onEdit, onStatusChange, onMarkAccep
             {format(parseISO(wo.startDate), 'dd MMM yyyy', { locale: es })}
             {wo.endDate && <>{' → '}{format(parseISO(wo.endDate), 'dd MMM yyyy', { locale: es })}</>}
             <span style={{ color: 'var(--clr-border)' }}>·</span>
-            {Number(wo.quantity)} {billingLabels[wo.billingType]} × {fmt(Number(wo.unitRate))}
+            {Number(wo.quantity)} {billingLabels[wo.billingType]}{isMultiRate ? ' (tasas mixtas)' : ` × ${fmtCur(Number(wo.unitRate), wo.currency ?? 'PEN')}`}
           </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>{fmt(grandTotal)}</div>
-          {extraCosts > 0 && <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 1 }}>+{fmt(extraCosts)} extras</div>}
-          <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginTop: 2 }}>sin IGV</div>
+          <div style={{ fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>{fmtCur(grandTotal, wo.currency ?? 'PEN')}</div>
+          {extraCosts > 0 && <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 1 }}>+{fmtCur(extraCosts, wo.currency ?? 'PEN')} extras</div>}
+          <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginTop: 2 }}>inc. IGV</div>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--clr-border)', flexWrap: 'wrap' }}>
@@ -1132,12 +1190,20 @@ function WorkOrderRow({ wo, company, onOpen, onEdit, onStatusChange, onMarkAccep
         >
           <Download size={11} /> PDF
         </button>
+        {(wo.serviceReports?.length ?? 0) > 0 && company && (
+          <button
+            onClick={(e) => { e.stopPropagation(); exportLiquidacionDetallada(wo, company) }}
+            style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'rgba(74,126,187,0.12)', color: '#2a5d9c', border: '1px solid rgba(74,126,187,0.4)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 600 }}
+          >
+            <FileText size={11} /> PDF Detallado
+          </button>
+        )}
         {wo.status === 'DRAFT' && (
           <button
-            onClick={(e) => { e.stopPropagation(); onStatusChange('ACTIVE') }}
-            style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'rgba(37,99,235,0.2)', color: 'var(--clr-primary-lt)', border: '1px solid rgba(37,99,235,0.4)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            onClick={(e) => { e.stopPropagation(); onSend() }}
+            style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'rgba(217,119,6,0.15)', color: '#d97706', border: '1px solid rgba(217,119,6,0.4)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
           >
-            <Zap size={11} /> Activar
+            <Send size={11} /> Enviar
           </button>
         )}
         {wo.status === 'SENT' && (
@@ -1148,7 +1214,15 @@ function WorkOrderRow({ wo, company, onOpen, onEdit, onStatusChange, onMarkAccep
             <ThumbsUp size={11} /> Aceptada
           </button>
         )}
-        {(['ACCEPTED', 'ACTIVE'] as WorkOrderStatus[]).includes(wo.status) && (
+        {wo.status === 'ACCEPTED' && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onStatusChange('ACTIVE') }}
+            style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'rgba(37,99,235,0.2)', color: 'var(--clr-primary-lt)', border: '1px solid rgba(37,99,235,0.4)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            <Zap size={11} /> Activar
+          </button>
+        )}
+        {wo.status === 'ACTIVE' && (
           <button
             onClick={(e) => { e.stopPropagation(); onStatusChange('COMPLETED') }}
             style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: 'var(--clr-success-bg)', color: 'var(--clr-success)', border: '1px solid var(--clr-success-border)', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
@@ -1183,6 +1257,7 @@ export default function WorkOrdersPage() {
   const [newOpen, setNewOpen]     = useState(false)
   const [fromQuote, setFromQuote] = useState<Quote | null>(null)
   const [selected, setSelected]   = useState<WorkOrder | null>(null)
+  const [sendWO, setSendWO]       = useState<WorkOrder | null>(null)
   const [editingWO, setEditingWO] = useState<WorkOrder | null>(null)
 
   // Vista previa PDF de OT
@@ -1219,6 +1294,7 @@ export default function WorkOrdersPage() {
   }, [])
   const updateStatusPage = useUpdateWorkOrderStatus()
   const markAcceptedPage = useMarkAccepted()
+  const markSentPage     = useMarkSent()
 
   const counts = Object.fromEntries(
     Object.keys(statusConfig).map((k) => [k, workOrders.filter((w) => w.status === k).length])
@@ -1229,7 +1305,7 @@ export default function WorkOrdersPage() {
     ? filtered.filter((wo) =>
         wo.number.toLowerCase().includes(search.toLowerCase()) ||
         wo.client.businessName.toLowerCase().includes(search.toLowerCase()) ||
-        wo.equipment.name.toLowerCase().includes(search.toLowerCase()) ||
+        (wo.equipment?.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
         (wo.location ?? '').toLowerCase().includes(search.toLowerCase())
       )
     : filtered
@@ -1239,14 +1315,14 @@ export default function WorkOrdersPage() {
     : null
 
   return (
-    <AppShell active="workorders" title="Órdenes de Trabajo">
+    <AppShell active="workorders" title="Liquidaciones">
       <div style={{ maxWidth: 1400, padding: '24px 28px' }}>
         {/* Page Header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)', margin: 0 }}>Órdenes de Trabajo</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)', margin: 0 }}>Liquidaciones</h1>
             <p style={{ fontSize: 13, color: 'var(--clr-text-subtle)', marginTop: 4 }}>
-              {workOrders.length} órdenes · {counts.ACTIVE ?? 0} activas · {counts.COMPLETED ?? 0} completadas
+              {workOrders.length} liquidaciones · {counts.ACTIVE ?? 0} activas · {counts.COMPLETED ?? 0} completadas
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -1254,7 +1330,7 @@ export default function WorkOrdersPage() {
               onClick={() => setNewOpen(true)}
               style={{ fontSize: 13, padding: '8px 16px', borderRadius: 8, background: 'var(--clr-primary)', color: 'var(--clr-on-primary)', border: 'none', cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}
             >
-              <Plus size={14} /> Nueva OT
+              <Plus size={14} /> Nueva Liquidación
             </button>
           </div>
         </div>
@@ -1327,6 +1403,7 @@ export default function WorkOrdersPage() {
                 onStatusChange={(status) => updateStatusPage.mutate({ id: wo.id, status })}
                 onMarkAccepted={() => markAcceptedPage.mutateAsync(wo.id)}
                 onPreviewPDF={() => openPreviewWO(wo)}
+                onSend={() => { setSelected(wo); setSendWO(wo) }}
               />
             ))}
           </div>
@@ -1335,7 +1412,13 @@ export default function WorkOrdersPage() {
 
       {newOpen && <NewWorkOrderModal fromQuote={fromQuote ?? undefined} onClose={() => { setNewOpen(false); setFromQuote(null) }} />}
       {editingWO && <NewWorkOrderModal key={editingWO.id} editingWO={editingWO} onClose={() => setEditingWO(null)} />}
-      {currentSelected && <OTDetailModal wo={currentSelected} onClose={() => setSelected(null)} />}
+      {currentSelected && (
+        <OTDetailModal
+          wo={currentSelected}
+          onClose={() => { setSelected(null); setSendWO(null) }}
+          initialShowSend={sendWO?.id === currentSelected.id}
+        />
+      )}
 
       {/* ── Modal Vista Previa OT PDF ────────────────────────────────────── */}
       {previewWO && (

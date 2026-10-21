@@ -5,11 +5,13 @@ export type QuoteStatus = 'DRAFT' | 'SENT' | 'APPROVED' | 'REJECTED' | 'CONVERTE
 
 export interface QuoteItem {
   id: string
+  equipmentId?: string | null
   description: string
   quantity: string
   unitPrice: string
   total: string
   order: number
+  equipment?: { name: string; type: string } | null
 }
 
 export interface Quote {
@@ -55,7 +57,7 @@ export function useCreateQuote() {
     mutationFn: (data: {
       clientId: string; equipmentId?: string; validUntil: string
       currency?: string; notes?: string
-      items: { description: string; quantity: number; unitPrice: number }[]
+      items: { equipmentId?: string; description: string; quantity: number; unitPrice: number }[]
     }) => api.post('/quotes', data).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['quotes'] }),
   })

@@ -84,8 +84,8 @@ function buildPDF(wo: WorkOrder, company: Company): jsPDF {
     ['RUC', wo.client.ruc],
   ])
   infoBox(col2, y, colW, boxH1, 'Servicio', [
-    ['Equipo', clip(wo.equipment.name, 30)],
-    ['Operario', wo.operator.name],
+    ['Equipo', clip(wo.equipment?.name ?? 'Múltiples equipos', 30)],
+    ['Operario', wo.operator?.name ?? 'Ver reportes'],
   ])
   y += boxH1 + 4
 
@@ -109,7 +109,7 @@ function buildPDF(wo: WorkOrder, company: Company): jsPDF {
 
   setFill(LIGHT); rect(L, y, R - L, 7); setColor(DARK)
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8)
-  const svcDesc = wo.description ? `${wo.equipment.name} — ${wo.description}` : wo.equipment.name
+  const svcDesc = wo.description ? `${wo.equipment?.name ?? 'Servicio'} — ${wo.description}` : (wo.equipment?.name ?? 'Ver detalle de reportes')
   doc.text(clip(svcDesc, 55), L + 3, y + 4.5)
   doc.text(`${Number(wo.quantity)} ${unit}`, L + 98, y + 4.5, { align: 'right' })
   doc.text(fmt(Number(wo.unitRate)), L + 127, y + 4.5, { align: 'right' })

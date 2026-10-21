@@ -1,4 +1,4 @@
-﻿import { useState, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { format, parseISO, isThisMonth } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
@@ -31,6 +31,8 @@ const METHOD_COLOR: Record<string, { border: string; bg: string; text: string }>
 
 const fmt = (n: number) =>
   'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtUsd = (n: number) =>
+  '$ ' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 const PAGE_SIZE = 20
 
@@ -76,15 +78,42 @@ export default function PaymentsHistoryPage() {
   const safePage   = Math.min(page, totalPages)
   const pageItems  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  const totalCobrado   = all.reduce((s, p) => s + Number(p.amount), 0)
-  const totalFiltrado  = filtered.reduce((s, p) => s + Number(p.amount), 0)
-  const cobradoMes     = all.filter((p) => isThisMonth(parseISO(p.paidAt))).reduce((s, p) => s + Number(p.amount), 0)
-  const promedio       = all.length ? totalCobrado / all.length : 0
+  const stats = useMemo(() => {
+    let penTotal = 0, usdTotal = 0, penCount = 0, usdCount = 0, penMes = 0, usdMes = 0
+    for (const p of all) {
+      const isUsd = p.invoice.currency === 'USD'
+      const amt = Number(p.amount)
+      if (isUsd) { usdTotal += amt; usdCount++ } else { penTotal += amt; penCount++ }
+      if (isThisMonth(parseISO(p.paidAt))) { if (isUsd) usdMes += amt; else penMes += amt }
+    }
+    return {
+      penTotal, usdTotal, penCount, usdCount, penMes, usdMes,
+      penAvg: penCount > 0 ? penTotal / penCount : 0,
+      usdAvg: usdCount > 0 ? usdTotal / usdCount : 0,
+    }
+  }, [all])
 
-  const countByMethod  = all.reduce<Record<string, number>>((acc, p) => {
-    acc[p.method] = (acc[p.method] ?? 0) + 1
-    return acc
-  }, {})
+  const filteredStats = useMemo(() => {
+    let penFiltrado = 0, usdFiltrado = 0
+    const penByMethod: Record<string, number> = {}
+    const usdByMethod: Record<string, number> = {}
+    for (const p of filtered) {
+      const isUsd = p.invoice.currency === 'USD'
+      const amt = Number(p.amount)
+      if (isUsd) {
+        usdFiltrado += amt
+        usdByMethod[p.method] = (usdByMethod[p.method] ?? 0) + amt
+      } else {
+        penFiltrado += amt
+        penByMethod[p.method] = (penByMethod[p.method] ?? 0) + amt
+      }
+    }
+    return { penFiltrado, usdFiltrado, penByMethod, usdByMethod }
+  }, [filtered])
+
+  const countByMethod = useMemo(() => all.reduce<Record<string, number>>((acc, p) => {
+    acc[p.method] = (acc[p.method] ?? 0) + 1; return acc
+  }, {}), [all])
 
   const grouped = useMemo(() => {
     const map = new Map<string, typeof pageItems>()
@@ -100,15 +129,20 @@ export default function PaymentsHistoryPage() {
   async function exportExcel() {
     if (!filtered.length) return
     setXlsLoading(true)
-    const rows = filtered.map((p) => ({
-      'Fecha':      format(parseISO(p.paidAt), 'dd/MM/yyyy'),
-      'Hora':       format(parseISO(p.paidAt), 'HH:mm'),
-      'Cliente':    p.invoice.client.businessName,
-      'Factura':    `${p.invoice.series}-${p.invoice.number}`,
-      'Método':     METHOD_LABEL[p.method] ?? p.method,
-      'Referencia': p.reference ?? '',
-      'Monto S/':   `S/ ${Number(p.amount).toFixed(2)}`,
-    }))
+    const rows = filtered.map((p) => {
+      const isUsd = p.invoice.currency === 'USD'
+      return {
+        'Fecha':      format(parseISO(p.paidAt), 'dd/MM/yyyy'),
+        'Hora':       format(parseISO(p.paidAt), 'HH:mm'),
+        'Cliente':    p.invoice.client.businessName,
+        'Factura':    `${p.invoice.series}-${p.invoice.number}`,
+        'Moneda':     isUsd ? 'USD' : 'PEN',
+        'Método':     METHOD_LABEL[p.method] ?? p.method,
+        'Referencia': p.reference ?? '',
+        'Monto S/':   !isUsd ? Number(p.amount).toFixed(2) : '',
+        'Monto $':    isUsd  ? Number(p.amount).toFixed(2) : '',
+      }
+    })
     try {
       await exportToExcel(rows, 'historial-pagos', 'Historial de Pagos', 'blue')
     } finally {
@@ -119,8 +153,8 @@ export default function PaymentsHistoryPage() {
   function exportPdf() {
     if (!filtered.length) return
 
-    const fmtPdf = (n: number) =>
-      'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const fmtPdf    = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const fmtPdfUsd = (n: number) => '$ '  + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
     const METHOD_COLOR_PDF: Record<string, { color: string; bg: string }> = {
       TRANSFER: { color: '#1d4ed8', bg: '#dbeafe' },
@@ -129,7 +163,6 @@ export default function PaymentsHistoryPage() {
       CASH:     { color: '#15803d', bg: '#dcfce7' },
     }
 
-    // Group filtered by date
     const groups = new Map<string, typeof filtered>()
     filtered.forEach((p) => {
       const key = format(parseISO(p.paidAt), 'yyyy-MM-dd')
@@ -137,8 +170,12 @@ export default function PaymentsHistoryPage() {
       groups.get(key)!.push(p)
     })
 
-    const subtotales = filtered.reduce<Record<string, number>>((acc, p) => {
-      acc[p.method] = (acc[p.method] ?? 0) + Number(p.amount)
+    const penSubtotales = filtered.reduce<Record<string, number>>((acc, p) => {
+      if (p.invoice.currency !== 'USD') acc[p.method] = (acc[p.method] ?? 0) + Number(p.amount)
+      return acc
+    }, {})
+    const usdSubtotales = filtered.reduce<Record<string, number>>((acc, p) => {
+      if (p.invoice.currency === 'USD') acc[p.method] = (acc[p.method] ?? 0) + Number(p.amount)
       return acc
     }, {})
 
@@ -149,11 +186,19 @@ export default function PaymentsHistoryPage() {
     ].filter(Boolean).join('  ·  ')
 
     const rowsHtml = Array.from(groups.entries()).map(([dateKey, items]) => {
-      const dayTotal = items.reduce((s, p) => s + Number(p.amount), 0)
+      const penDayTotal = items.reduce((s, p) => p.invoice.currency !== 'USD' ? s + Number(p.amount) : s, 0)
+      const usdDayTotal = items.reduce((s, p) => p.invoice.currency === 'USD' ? s + Number(p.amount) : s, 0)
+      const dayTotalStr = [
+        penDayTotal > 0 ? fmtPdf(penDayTotal) : '',
+        usdDayTotal > 0 ? fmtPdfUsd(usdDayTotal) : '',
+      ].filter(Boolean).join(' · ')
       const dateLabel = format(parseISO(dateKey), "EEEE d 'de' MMMM yyyy", { locale: es })
       const dayRows = items.map((p, idx) => {
         const mc  = METHOD_COLOR_PDF[p.method] ?? { color: '#1d4ed8', bg: '#dbeafe' }
         const bg  = idx % 2 === 0 ? '#ffffff' : '#f8fafc'
+        const isUsd = p.invoice.currency === 'USD'
+        const amtStr   = isUsd ? fmtPdfUsd(Number(p.amount)) : fmtPdf(Number(p.amount))
+        const amtColor = isUsd ? '#1d4ed8' : '#15803d'
         return `
           <tr style="background:${bg}">
             <td style="padding:7px 10px;font-size:11px;color:#374151">${format(parseISO(p.paidAt), 'dd/MM/yyyy')}</td>
@@ -164,30 +209,38 @@ export default function PaymentsHistoryPage() {
               <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:12px;background:${mc.bg};color:${mc.color};white-space:nowrap">${METHOD_LABEL[p.method] ?? p.method}</span>
             </td>
             <td style="padding:7px 10px;font-size:11px;color:#6b7280;font-family:monospace">${p.reference ?? '—'}</td>
-            <td style="padding:7px 10px;font-size:12px;font-weight:700;color:#15803d;text-align:right;white-space:nowrap">${fmtPdf(Number(p.amount))}</td>
+            <td style="padding:7px 10px;font-size:12px;font-weight:700;color:${amtColor};text-align:right;white-space:nowrap">${amtStr}</td>
           </tr>`
       }).join('')
       return `
         <tr style="background:#f1f5f9">
           <td colspan="6" style="padding:6px 10px;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em">${dateLabel}</td>
-          <td style="padding:6px 10px;font-size:11px;font-weight:700;color:#374151;text-align:right;white-space:nowrap">${fmtPdf(dayTotal)}</td>
+          <td style="padding:6px 10px;font-size:11px;font-weight:700;color:#374151;text-align:right;white-space:nowrap">${dayTotalStr}</td>
         </tr>
         ${dayRows}`
     }).join('')
 
-    const subtotalRows = Object.entries(subtotales).map(([m, sum]) => {
-      const mc = METHOD_COLOR_PDF[m] ?? { color: '#1d4ed8', bg: '#dbeafe' }
-      return `<span style="font-size:11px;font-weight:700;color:${mc.color};margin-right:16px">${METHOD_LABEL[m] ?? m}: ${fmtPdf(sum)}</span>`
-    }).join('')
+    const subtotalRows = [
+      ...Object.entries(penSubtotales).map(([m, sum]) => {
+        const mc = METHOD_COLOR_PDF[m] ?? { color: '#1d4ed8', bg: '#dbeafe' }
+        return `<span style="font-size:11px;font-weight:700;color:${mc.color};margin-right:16px">${METHOD_LABEL[m] ?? m}: ${fmtPdf(sum)}</span>`
+      }),
+      ...Object.entries(usdSubtotales).map(([m, sum]) => {
+        return `<span style="font-size:11px;font-weight:700;color:#1d4ed8;margin-right:16px">${METHOD_LABEL[m] ?? m} $: ${fmtPdfUsd(sum)}</span>`
+      }),
+    ].join('')
 
     const payExtraCss = `
       .kpis { display:flex; gap:10px; margin-bottom:14px; }
       .kpi  { flex:1; border-radius:8px; padding:10px 14px; border:1px solid #93c5fd; background:#dbeafe; }
       .kpi-label { font-size:9px; font-weight:700; color:#1e3a8a; text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
-      .kpi-value { font-size:16px; font-weight:800; color:#1e3a8a; }
-      .kpi-sub   { font-size:9px; color:#1e40af; margin-top:2px; }
+      .kpi-pen   { font-size:14px; font-weight:800; color:#15803d; }
+      .kpi-usd   { font-size:13px; font-weight:700; color:#1d4ed8; margin-top:2px; }
+      .kpi-sub   { font-size:9px; color:#1e40af; margin-top:3px; }
       .footer    { margin-top:14px; display:flex; justify-content:space-between; align-items:center; padding:7px 12px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; }
-      .total     { font-size:14px; font-weight:700; color:#15803d; }
+      .totals    { display:flex; gap:16px; }
+      .total-pen { font-size:14px; font-weight:700; color:#15803d; }
+      .total-usd { font-size:14px; font-weight:700; color:#1d4ed8; }
       @page { margin:14mm 12mm; size:A4 landscape; }
       @media print { body { padding:8px 12px; } }
     `
@@ -198,13 +251,13 @@ ${buildPastelHtmlHead('Historial de Pagos', payExtraCss)}
 ${buildPastelHeader({
   title: 'Historial de Pagos',
   subtitle: `${filtered.length} registro${filtered.length !== 1 ? 's' : ''} · ${genTs}${filterDesc ? ` · ${filterDesc}` : ''}`,
-  rightHtml: `<span style="font-size:9px;display:block;margin-bottom:2px;color:#1e40af">TOTAL COBRADO</span><strong style="font-size:22px;color:#15803d">${fmtPdf(totalFiltrado)}</strong>`,
+  rightHtml: `<div style="text-align:right"><div style="font-size:9px;color:#1e40af;margin-bottom:2px">TOTAL COBRADO</div><strong style="font-size:18px;color:#15803d">${fmtPdf(filteredStats.penFiltrado)}</strong><br><strong style="font-size:16px;color:#1d4ed8">${fmtPdfUsd(filteredStats.usdFiltrado)}</strong></div>`,
 })}
 <div class="kpis">
-  <div class="kpi"><div class="kpi-label">Total Cobrado</div><div class="kpi-value">${fmtPdf(totalCobrado)}</div><div class="kpi-sub">${all.length} pagos en total</div></div>
-  <div class="kpi"><div class="kpi-label">Este Mes</div><div class="kpi-value">${fmtPdf(cobradoMes)}</div><div class="kpi-sub">mes en curso</div></div>
-  <div class="kpi"><div class="kpi-label">Pago Promedio</div><div class="kpi-value">${fmtPdf(promedio)}</div><div class="kpi-sub">por transacción</div></div>
-  <div class="kpi"><div class="kpi-label">Filtrado</div><div class="kpi-value">${fmtPdf(totalFiltrado)}</div><div class="kpi-sub">${filtered.length} registros</div></div>
+  <div class="kpi"><div class="kpi-label">Total Cobrado</div><div class="kpi-pen">${fmtPdf(stats.penTotal)}</div><div class="kpi-usd">${fmtPdfUsd(stats.usdTotal)}</div><div class="kpi-sub">${all.length} pagos</div></div>
+  <div class="kpi"><div class="kpi-label">Este Mes</div><div class="kpi-pen">${fmtPdf(stats.penMes)}</div><div class="kpi-usd">${fmtPdfUsd(stats.usdMes)}</div><div class="kpi-sub">mes en curso</div></div>
+  <div class="kpi"><div class="kpi-label">Pago Promedio</div><div class="kpi-pen">${fmtPdf(stats.penAvg)}</div><div class="kpi-usd">${fmtPdfUsd(stats.usdAvg)}</div><div class="kpi-sub">por transacción</div></div>
+  <div class="kpi"><div class="kpi-label">Filtrado</div><div class="kpi-pen">${fmtPdf(filteredStats.penFiltrado)}</div><div class="kpi-usd">${fmtPdfUsd(filteredStats.usdFiltrado)}</div><div class="kpi-sub">${filtered.length} registros</div></div>
 </div>
 <table>
   <thead><tr>
@@ -214,7 +267,10 @@ ${buildPastelHeader({
 </table>
 <div class="footer">
   <div>${subtotalRows}</div>
-  <div class="total">Total: ${fmtPdf(totalFiltrado)}</div>
+  <div class="totals">
+    <span class="total-pen">S/: ${fmtPdf(filteredStats.penFiltrado)}</span>
+    <span class="total-usd">$: ${fmtPdfUsd(filteredStats.usdFiltrado)}</span>
+  </div>
 </div>
 ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm'))}
 </body></html>`
@@ -228,16 +284,21 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
 
   function exportCsv() {
     const rows = [
-      ['Fecha', 'Hora', 'Cliente', 'Factura', 'Método', 'Referencia', 'Monto'],
-      ...filtered.map((p) => [
-        format(parseISO(p.paidAt), 'dd/MM/yyyy'),
-        format(parseISO(p.paidAt), 'HH:mm'),
-        p.invoice.client.businessName,
-        `${p.invoice.series}-${p.invoice.number}`,
-        METHOD_LABEL[p.method] ?? p.method,
-        p.reference ?? '',
-        Number(p.amount).toFixed(2),
-      ]),
+      ['Fecha', 'Hora', 'Cliente', 'Factura', 'Moneda', 'Método', 'Referencia', 'Monto S/', 'Monto $'],
+      ...filtered.map((p) => {
+        const isUsd = p.invoice.currency === 'USD'
+        return [
+          format(parseISO(p.paidAt), 'dd/MM/yyyy'),
+          format(parseISO(p.paidAt), 'HH:mm'),
+          p.invoice.client.businessName,
+          `${p.invoice.series}-${p.invoice.number}`,
+          isUsd ? 'USD' : 'PEN',
+          METHOD_LABEL[p.method] ?? p.method,
+          p.reference ?? '',
+          !isUsd ? Number(p.amount).toFixed(2) : '',
+          isUsd  ? Number(p.amount).toFixed(2) : '',
+        ]
+      }),
     ]
     const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\n')
     const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8;' })
@@ -258,7 +319,10 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
             <p style={{ fontSize: 13, color: 'var(--clr-text-subtle)', marginTop: 4 }}>
               {isLoading ? '—' : `${all.length} pago${all.length !== 1 ? 's' : ''} registrado${all.length !== 1 ? 's' : ''}`}
               {!isLoading && all.length > 0 && (
-                <> · <span style={{ color: 'var(--clr-success)', fontWeight: 600 }}>{fmt(totalCobrado)} total cobrado</span></>
+                <> · <span style={{ color: 'var(--clr-success)', fontWeight: 600 }}>{fmt(stats.penTotal)}</span>
+                  {' · '}<span style={{ color: '#2563eb', fontWeight: 600 }}>{fmtUsd(stats.usdTotal)}</span>
+                  {' cobrado'}
+                </>
               )}
             </p>
           </div>
@@ -284,24 +348,24 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
 
         {/* ── KPI Cards ── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 24 }}>
-          {[
-            { label: 'Total Cobrado', value: fmt(totalCobrado),  sub: `${all.length} pagos`,        note: 'Efectivo recibido sin detracción', icon: TrendingUp,   color: 'var(--clr-success)', bg: 'var(--clr-success-bg)'  },
-            { label: 'Este Mes',      value: fmt(cobradoMes),    sub: 'mes en curso',                note: 'Efectivo recibido sin detracción', icon: CalendarCheck,color: 'var(--clr-primary)', bg: 'var(--clr-primary-bg)'  },
-            { label: 'Pago Promedio', value: fmt(promedio),      sub: 'por transacción',             note: undefined,                          icon: Calculator,   color: 'var(--clr-violet)', bg: 'var(--clr-violet-bg)' },
-            { label: 'Filtrado',      value: fmt(totalFiltrado), sub: `${filtered.length} registros`,note: 'Efectivo recibido sin detracción', icon: Hash,         color: '#d97706', bg: 'rgba(217,119,6,0.10)'   },
-          ].map((kpi) => {
+          {([
+            { label: 'Total Cobrado', pen: stats.penTotal,             usd: stats.usdTotal,             sub: `${all.length} pagos`,           icon: TrendingUp,    color: 'var(--clr-success)',  bg: 'var(--clr-success-bg)'       },
+            { label: 'Este Mes',      pen: stats.penMes,               usd: stats.usdMes,               sub: 'mes en curso',                   icon: CalendarCheck, color: 'var(--clr-primary)',  bg: 'var(--clr-primary-bg)'       },
+            { label: 'Pago Promedio', pen: stats.penAvg,               usd: stats.usdAvg,               sub: 'por transacción',                icon: Calculator,    color: 'var(--clr-violet)',   bg: 'var(--clr-violet-bg)'        },
+            { label: 'Filtrado',      pen: filteredStats.penFiltrado,  usd: filteredStats.usdFiltrado,  sub: `${filtered.length} registros`,   icon: Hash,          color: '#d97706',             bg: 'rgba(217,119,6,0.10)'        },
+          ]).map((kpi) => {
             const Icon = kpi.icon
             return (
               <div key={kpi.label} style={{ background: 'var(--clr-sidebar)', border: '1px solid var(--clr-border)', borderRadius: 12, padding: '14px 16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{kpi.label}</span>
                   <div style={{ width: 28, height: 28, borderRadius: 8, background: kpi.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Icon size={14} style={{ color: kpi.color }} />
                   </div>
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--clr-text)', whiteSpace: 'nowrap' }}>{isLoading ? '—' : kpi.value}</div>
-                <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 3 }}>{kpi.sub}</div>
-                {kpi.note && <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginTop: 3 }}>{kpi.note}</div>}
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--clr-text)', whiteSpace: 'nowrap' }}>{isLoading ? '—' : fmt(kpi.pen)}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#2563eb', whiteSpace: 'nowrap', marginTop: 2 }}>{isLoading ? '—' : fmtUsd(kpi.usd)}</div>
+                <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 4 }}>{kpi.sub}</div>
               </div>
             )
           })}
@@ -373,13 +437,13 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
           {/* Cabecera tabla */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '110px 1fr 120px 130px 130px 110px',
+            gridTemplateColumns: '110px 1fr 120px 130px 130px 110px 110px',
             padding: '9px 18px',
             background: 'var(--clr-surface)',
             borderBottom: '1px solid var(--clr-border)',
           }}>
-            {['FECHA', 'CLIENTE', 'FACTURA', 'MÉTODO', 'REFERENCIA', 'MONTO'].map((h, i) => (
-              <div key={h} style={{ fontSize: 10, fontWeight: 600, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: i === 5 ? 'right' : 'left' }}>
+            {['FECHA', 'CLIENTE', 'FACTURA', 'MÉTODO', 'REFERENCIA', 'MONTO S/', 'MONTO $'].map((h, i) => (
+              <div key={h} style={{ fontSize: 10, fontWeight: 600, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: i >= 5 ? 'right' : 'left' }}>
                 {h}
               </div>
             ))}
@@ -411,7 +475,11 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
                   </span>
                   <div style={{ flex: 1, height: 1, background: 'var(--clr-border)' }} />
                   <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600 }}>
-                    {fmt(items.reduce((s, p) => s + Number(p.amount), 0))}
+                    {(() => {
+                      const penDay = items.reduce((s, p) => p.invoice.currency !== 'USD' ? s + Number(p.amount) : s, 0)
+                      const usdDay = items.reduce((s, p) => p.invoice.currency === 'USD' ? s + Number(p.amount) : s, 0)
+                      return [penDay > 0 ? fmt(penDay) : '', usdDay > 0 ? fmtUsd(usdDay) : ''].filter(Boolean).join(' · ')
+                    })()}
                   </span>
                 </div>
 
@@ -420,12 +488,13 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
                   const mc   = METHOD_COLOR[payment.method] ?? METHOD_COLOR.TRANSFER
                   const Icon = METHOD_ICON[payment.method] ?? CreditCard
                   const isLast = idx === items.length - 1
+                  const isUsd  = payment.invoice.currency === 'USD'
                   return (
                     <div
                       key={payment.id}
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '110px 1fr 120px 130px 130px 110px',
+                        gridTemplateColumns: '110px 1fr 120px 130px 130px 110px 110px',
                         padding: '11px 18px',
                         alignItems: 'center',
                         borderBottom: isLast ? 'none' : '1px solid var(--clr-border)',
@@ -475,9 +544,14 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
                         {payment.reference ?? '—'}
                       </div>
 
-                      {/* Monto */}
-                      <div style={{ textAlign: 'right', fontSize: 14, fontWeight: 700, color: 'var(--clr-success)', whiteSpace: 'nowrap' }}>
-                        {fmt(Number(payment.amount))}
+                      {/* Monto S/ */}
+                      <div style={{ textAlign: 'right', fontSize: 14, fontWeight: 700, color: !isUsd ? 'var(--clr-success)' : 'var(--clr-text-subtle)', whiteSpace: 'nowrap' }}>
+                        {!isUsd ? fmt(Number(payment.amount)) : '—'}
+                      </div>
+
+                      {/* Monto $ */}
+                      <div style={{ textAlign: 'right', fontSize: 14, fontWeight: 700, color: isUsd ? '#2563eb' : 'var(--clr-text-subtle)', whiteSpace: 'nowrap' }}>
+                        {isUsd ? fmtUsd(Number(payment.amount)) : '—'}
                       </div>
                     </div>
                   )
@@ -489,27 +563,32 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
           {/* ── Footer tabla: subtotales por método ── */}
           {!isLoading && filtered.length > 0 && (
             <div style={{
-              display: 'flex', gap: 20, padding: '12px 18px',
+              display: 'flex', gap: 16, padding: '12px 18px',
               borderTop: '1px solid var(--clr-border)', background: 'var(--clr-surface)',
               flexWrap: 'wrap', alignItems: 'center',
             }}>
               <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Subtotales:</span>
-              {Object.entries(
-                filtered.reduce<Record<string, number>>((acc, p) => {
-                  acc[p.method] = (acc[p.method] ?? 0) + Number(p.amount)
-                  return acc
-                }, {})
-              ).map(([m, sum]) => {
+              {Object.entries(filteredStats.penByMethod).map(([m, sum]) => {
                 const mc = METHOD_COLOR[m] ?? METHOD_COLOR.TRANSFER
                 return (
-                  <span key={m} style={{ fontSize: 11, color: mc.text, fontWeight: 700 }}>
+                  <span key={`pen-${m}`} style={{ fontSize: 11, color: mc.text, fontWeight: 700 }}>
                     {METHOD_LABEL[m]}: {fmt(sum)}
                   </span>
                 )
               })}
-              <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 700, color: 'var(--clr-success)', whiteSpace: 'nowrap' }}>
-                Total: {fmt(totalFiltrado)}
-              </span>
+              {Object.entries(filteredStats.usdByMethod).map(([m, sum]) => (
+                <span key={`usd-${m}`} style={{ fontSize: 11, color: '#2563eb', fontWeight: 700 }}>
+                  {METHOD_LABEL[m]} $: {fmtUsd(sum)}
+                </span>
+              ))}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 14, alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--clr-success)', whiteSpace: 'nowrap' }}>
+                  S/: {fmt(filteredStats.penFiltrado)}
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#2563eb', whiteSpace: 'nowrap' }}>
+                  $: {fmtUsd(filteredStats.usdFiltrado)}
+                </span>
+              </div>
             </div>
           )}
         </div>
@@ -561,5 +640,3 @@ ${buildPastelFooter(`Historial de Pagos`, format(new Date(), 'dd/MM/yyyy HH:mm')
     </AppShell>
   )
 }
-
-

@@ -51,7 +51,12 @@ export async function exportToExcel(
   const isNumericVal = (v: unknown): boolean => {
     if (v == null || v === '' || v === '—') return true
     if (typeof v === 'number') return true
-    if (typeof v === 'string') return /^S\/\s?[\d,.]+$|^\d[\d,.]*$/.test(v.trim())
+    if (typeof v === 'string') {
+      const s = v.trim()
+      // Long digit-only strings are IDs (RUC, account numbers) — not numbers
+      if (/^\d{8,}$/.test(s)) return false
+      return /^S\/\s?[\d,.]+$|^\$\s?[\d,.]+$|^\d[\d,.]*$/.test(s)
+    }
     return false
   }
   // Detect numeric columns (for right-align + number format)
@@ -59,10 +64,10 @@ export async function exportToExcel(
 
   const numericCols = new Set(headers.filter(isNumeric))
 
-  // Column widths
+  // Column widths — extra padding accounts for thousands separators and font metrics
   const colWidths = headers.map((h) => {
     const max = Math.max(h.length, ...rows.map((r) => String(r[h] ?? '').length))
-    return Math.min(Math.max(max + 3, 10), 42)
+    return Math.min(Math.max(max + 6, 12), 55)
   })
 
   const parseNum = (v: unknown): number | null => {
@@ -131,17 +136,19 @@ export async function exportToExcel(
       const num = numericCols.has(h) ? parseNum(raw) : null
 
       if (num !== null) {
-        // Detect currency vs plain number
-        const isCurrency = typeof raw === 'string' && /S\//.test(raw)
+        const rawStr = typeof raw === 'string' ? raw.trim() : ''
+        const isSOL = /^S\//.test(rawStr)
+        const isUSD = /^\$/.test(rawStr)
+        const fmt = isSOL ? '"S/ "#,##0.00' : isUSD ? '"$ "#,##0.00' : Number.isInteger(num) ? '#,##0' : '#,##0.00'
         return {
           value: num,
           type: Number as unknown as NumberConstructor,
-          format: isCurrency ? '"S/ "#,##0.00' : Number.isInteger(num) ? '#,##0' : '#,##0.00',
+          format: fmt,
           backgroundColor: bg,
           align: 'right' as const,
           fontSize: 9,
           height: 16,
-          color: isCurrency && num < 0 ? RED_XLS : undefined,
+          color: (isSOL || isUSD) && num < 0 ? RED_XLS : undefined,
         }
       }
 
@@ -166,7 +173,7 @@ export async function exportToExcel(
           const n = parseNum(r[h])
           return sum + (n ?? 0)
         }, 0)
-        const isCurrency = rows.some((r) => typeof r[h] === 'string' && /S\//.test(String(r[h])))
+        const isCurrency = rows.some((r) => typeof r[h] === 'string' && /^S\/|^\$/.test(String(r[h]).trim()))
         return {
           value: total,
           type: Number as unknown as NumberConstructor,
@@ -295,7 +302,7 @@ export function exportToPDF(
     let x = MARGIN
     headers.forEach((h, i) => {
       doc.text(
-        truncate(h, Math.floor(normWidths[i] / 1.6)),
+        truncate(h, Math.floor(normWidths[i] / 1.3)),
         x + 2,
         startY + HEADER_H / 2 + 1.5
       )
@@ -370,7 +377,7 @@ export function exportToPDF(
     let x = MARGIN
     headers.forEach((h, i) => {
       const val = String(row[h] ?? '—')
-      const maxC = Math.floor(normWidths[i] / 1.55)
+      const maxC = Math.floor(normWidths[i] / 1.3)
       doc.text(truncate(val, maxC), x + 1.5, y + ROW_H / 2 + 1.5)
       x += normWidths[i]
     })

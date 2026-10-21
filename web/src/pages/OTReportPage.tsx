@@ -6,8 +6,14 @@ import { useWorkOrdersReport } from '../hooks/useReports'
 import AppShell from '../components/AppShell'
 import ExportMenu from '../components/ExportMenu'
 
-const fmt  = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtK = (n: number) => n >= 1000 ? `S/ ${(n / 1000).toFixed(1)}k` : fmt(n)
+const fmt    = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtK   = (n: number) => n >= 1000 ? `S/ ${(n / 1000).toFixed(1)}k` : fmt(n)
+const fmtUsd = (n: number) => '$ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtCur = (n: number, currency?: string) => currency === 'USD' ? fmtUsd(n) : fmt(n)
+const fmtCurK = (n: number, currency?: string) => {
+  if (currency === 'USD') return n >= 1000 ? `$ ${(n / 1000).toFixed(1)}k` : fmtUsd(n)
+  return fmtK(n)
+}
 const fmtD = (d: string) => format(parseISO(d), 'dd/MM/yyyy')
 
 const STATUS_CFG: Record<string, { label: string; color: string; bg: string }> = {
@@ -54,7 +60,7 @@ export default function OTReportPage() {
   )
 
   return (
-    <AppShell active="reports" title="Reporte de OT">
+    <AppShell active="reports" title="Reporte de Liquidaciones">
       <div style={{ maxWidth: 1400, padding: '24px 28px 56px' }}>
         <button onClick={() => navigate('/reports')}
           style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--clr-text-subtle)', fontSize: 12, padding: 0, marginBottom: 10 }}
@@ -66,15 +72,15 @@ export default function OTReportPage() {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <ClipboardList size={20} style={{ color: '#8b5cf6' }} /> Órdenes de Trabajo
+              <ClipboardList size={20} style={{ color: '#8b5cf6' }} /> Liquidaciones
             </h1>
-            <p style={{ fontSize: 13, color: 'var(--clr-text-subtle)', marginTop: 4 }}>Actividad operativa, ingresos y márgenes por OT</p>
+            <p style={{ fontSize: 13, color: 'var(--clr-text-subtle)', marginTop: 4 }}>Actividad operativa, ingresos y márgenes por Liquidación</p>
           </div>
           <ExportMenu
-            title="Reporte de OTs — FlotaTrack"
-            filename="ordenes-trabajo"
+            title="Reporte de Liquidaciones — FlotaTrack"
+            filename="liquidaciones"
             csvRows={items.map((wo) => ({
-              'OT': wo.number, 'Cliente': wo.clientName, 'RUC': wo.clientRuc,
+              'Liquidación': wo.number, 'Cliente': wo.clientName, 'RUC': wo.clientRuc,
               'Equipo': wo.equipmentName, 'Operario': wo.operatorName,
               'Fecha inicio': fmtD(wo.startDate),
               'Tipo': BILLING_LABEL[wo.billingType] ?? wo.billingType,
@@ -113,10 +119,10 @@ export default function OTReportPage() {
         {/* KPIs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 20 }}>
           {[
-            { label: 'Total OTs',       value: s?.total ?? 0,                           color: 'var(--clr-text)', isStr: false },
-            { label: 'Ingresos (OTs)',  value: fmtK(s?.totalRevenue ?? 0),              color: 'var(--clr-success)', isStr: true  },
-            { label: 'Costos',          value: fmtK(s?.totalCosts ?? 0),                color: 'var(--clr-danger)', isStr: true  },
-            { label: 'Margen bruto',    value: fmtK(s?.grossMargin ?? 0),               color: !s ? 'var(--clr-text-subtle)' : s.grossMargin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', isStr: true },
+            { label: 'Total OTs',       value: s?.total ?? 0,                                                                     color: 'var(--clr-text)', isStr: false },
+            { label: 'Ingresos (OTs)',  value: (() => { const cur = items.length && items.every(w => w.currency === 'USD') ? 'USD' : 'PEN'; return fmtCurK(s?.totalRevenue ?? 0, cur) })(), color: 'var(--clr-success)', isStr: true  },
+            { label: 'Costos',          value: fmtK(s?.totalCosts ?? 0),                                                                  color: 'var(--clr-danger)', isStr: true  },
+            { label: 'Margen bruto',    value: (() => { const cur = items.length && items.every(w => w.currency === 'USD') ? 'USD' : 'PEN'; return fmtCurK(s?.grossMargin ?? 0, cur) })(), color: !s ? 'var(--clr-text-subtle)' : s.grossMargin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)', isStr: true },
           ].map(({ label, value, color, isStr }) => (
             <div key={label} style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: '12px 16px' }}>
               <div style={{ fontSize: 10, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>{label}</div>
@@ -148,7 +154,7 @@ export default function OTReportPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por N° OT, cliente, equipo u operario…"
+              placeholder="Buscar por N° Liquidación, cliente, equipo u operario…"
               style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 12, color: 'var(--clr-text)' }}
             />
             {search && <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--clr-text-subtle)', display: 'flex', padding: 0 }}><X size={13} /></button>}
@@ -166,7 +172,7 @@ export default function OTReportPage() {
               <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--clr-border)', background: 'var(--clr-sidebar)' }}>
-                    {['OT', 'Cliente', 'Equipo', 'Operario', 'Inicio', 'Tipo', 'Cant.', 'Ingresos', 'Costos', 'Margen', 'Marg.%', 'Estado'].map((h, i) => (
+                    {['Liquidación', 'Cliente', 'Equipo', 'Operario', 'Inicio', 'Tipo', 'Cant.', 'Ingresos', 'Costos', 'Margen', 'Marg.%', 'Estado'].map((h, i) => (
                       <th key={h} style={{ padding: '10px 12px', fontWeight: 600, color: 'var(--clr-text-subtle)', fontSize: 11, textAlign: i >= 6 ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -188,10 +194,10 @@ export default function OTReportPage() {
                         <td style={{ padding: '9px 12px', color: 'var(--clr-text-muted)', whiteSpace: 'nowrap' }}>{fmtD(wo.startDate)}</td>
                         <td style={{ padding: '9px 12px', color: 'var(--clr-text-subtle)' }}>{BILLING_LABEL[wo.billingType] ?? wo.billingType}</td>
                         <td style={{ padding: '9px 12px', color: 'var(--clr-text-subtle)', textAlign: 'right' }}>{wo.quantity.toFixed(1)}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--clr-text)', fontWeight: 600 }}>{wo.subtotal > 0 ? fmtK(wo.subtotal) : '—'}</td>
-                        <td style={{ padding: '9px 12px', textAlign: 'right', color: wo.costs > 0 ? 'var(--clr-danger)' : 'var(--clr-text-subtle)' }}>{wo.costs > 0 ? fmtK(wo.costs) : '—'}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', color: 'var(--clr-text)', fontWeight: 600 }}>{wo.subtotal > 0 ? fmtCurK(wo.subtotal, wo.currency) : '—'}</td>
+                        <td style={{ padding: '9px 12px', textAlign: 'right', color: wo.costs > 0 ? 'var(--clr-danger)' : 'var(--clr-text-subtle)' }}>{wo.costs > 0 ? fmtCurK(wo.costs, wo.currency) : '—'}</td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 600, color: wo.margin >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)' }}>
-                          {wo.subtotal > 0 ? fmtK(wo.margin) : '—'}
+                          {wo.subtotal > 0 ? fmtCurK(wo.margin, wo.currency) : '—'}
                         </td>
                         <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, fontSize: 11, color: pctColor }}>
                           {marginPct !== null ? `${marginPct.toFixed(1)}%` : '—'}
@@ -208,15 +214,19 @@ export default function OTReportPage() {
                     <td colSpan={7} style={{ padding: '10px 12px', fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600 }}>
                       {search.trim() ? `${filteredItems.length} de ${items.length} OTs` : `${items.length} OTs`}
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--clr-success)', fontWeight: 700 }}>
-                      {fmt(filteredItems.reduce((a, wo) => a + wo.subtotal, 0))}
-                    </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--clr-danger)', fontWeight: 700 }}>
-                      {fmt(filteredItems.reduce((a, wo) => a + wo.costs, 0))}
-                    </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: (() => { const m = filteredItems.reduce((a, wo) => a + wo.margin, 0); return m >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)' })() }}>
-                      {fmt(filteredItems.reduce((a, wo) => a + wo.margin, 0))}
-                    </td>
+                    {(() => {
+                      const currencies = [...new Set(filteredItems.map((wo) => wo.currency ?? 'PEN'))]
+                      const single = currencies.length === 1 ? currencies[0] : undefined
+                      const totalRev = filteredItems.reduce((a, wo) => a + wo.subtotal, 0)
+                      const totalCos = filteredItems.reduce((a, wo) => a + wo.costs, 0)
+                      const totalMar = totalRev - totalCos
+                      const fmtTotal = (n: number) => single ? fmtCur(n, single) : fmt(n)
+                      return (<>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--clr-success)', fontWeight: 700 }}>{fmtTotal(totalRev)}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--clr-danger)', fontWeight: 700 }}>{fmtTotal(totalCos)}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: totalMar >= 0 ? 'var(--clr-success)' : 'var(--clr-danger)' }}>{fmtTotal(totalMar)}</td>
+                      </>)
+                    })()}
                     <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--clr-text-subtle)', fontWeight: 600, fontSize: 11 }}>
                       {(() => { const rev = filteredItems.reduce((a, wo) => a + wo.subtotal, 0); const mar = filteredItems.reduce((a, wo) => a + wo.margin, 0); return rev > 0 ? `${((mar / rev) * 100).toFixed(1)}%` : '—' })()}
                     </td>

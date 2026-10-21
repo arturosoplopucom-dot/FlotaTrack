@@ -107,6 +107,10 @@ router.post('/import', async (req: AuthRequest, res: Response) => {
       'capacidad': 'capacity', 'capacity': 'capacity',
       'tarifa_hora': 'hourlyRate', 'hourlyrate': 'hourlyRate', 'tarifa hora': 'hourlyRate',
       'tarifa_dia': 'dailyRate', 'dailyrate': 'dailyRate', 'tarifa dia': 'dailyRate',
+      'tarifa_hora_pen': 'hourlyRatePen', 'tarifa hora pen': 'hourlyRatePen',
+      'tarifa_hora_usd': 'hourlyRateUsd', 'tarifa hora usd': 'hourlyRateUsd',
+      'tarifa_dia_pen': 'dailyRatePen', 'tarifa dia pen': 'dailyRatePen',
+      'tarifa_dia_usd': 'dailyRateUsd', 'tarifa dia usd': 'dailyRateUsd',
       'notas': 'notes', 'notes': 'notes',
       'estado': 'status', 'status': 'status',
     }
@@ -123,7 +127,7 @@ router.post('/import', async (req: AuthRequest, res: Response) => {
         if (dbKey && val.trim()) {
           if (dbKey === 'type')       mapped[dbKey] = TYPE_MAP[val.trim().toLowerCase()] ?? val.trim().toUpperCase()
           else if (dbKey === 'status') mapped[dbKey] = STATUS_MAP[val.trim().toLowerCase()] ?? val.trim().toUpperCase()
-          else if (dbKey === 'hourlyRate' || dbKey === 'dailyRate') mapped[dbKey] = parseFloat(val) || 0
+          else if (['hourlyRate','dailyRate','hourlyRatePen','hourlyRateUsd','dailyRatePen','dailyRateUsd'].includes(dbKey)) mapped[dbKey] = parseFloat(val) || 0
           else mapped[dbKey] = val.trim()
         }
       }

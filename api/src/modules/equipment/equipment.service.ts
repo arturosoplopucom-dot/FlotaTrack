@@ -45,9 +45,13 @@ export const equipmentService = {
     name: string; brand?: string; model?: string; serialNumber?: string
     type?: EquipmentType; capacity?: string
     hourlyRate?: number; dailyRate?: number
+    hourlyRatePen?: number; hourlyRateUsd?: number
+    dailyRatePen?: number; dailyRateUsd?: number
     status?: EquipmentStatus; notes?: string
   }) {
-    return prisma.equipment.create({
+    const hourlyPen = data.hourlyRatePen ?? (data.hourlyRate ?? 0)
+    const dailyPen  = data.dailyRatePen  ?? (data.dailyRate  ?? 0)
+    return (prisma.equipment as any).create({
       data: {
         companyId,
         name: data.name,
@@ -56,8 +60,12 @@ export const equipmentService = {
         serialNumber: data.serialNumber,
         type: data.type ?? 'CRANE',
         capacity: data.capacity,
-        hourlyRate: data.hourlyRate ?? 0,
-        dailyRate: data.dailyRate ?? 0,
+        hourlyRate: hourlyPen,
+        dailyRate: dailyPen,
+        hourlyRatePen: data.hourlyRatePen ?? null,
+        hourlyRateUsd: data.hourlyRateUsd ?? null,
+        dailyRatePen:  data.dailyRatePen  ?? null,
+        dailyRateUsd:  data.dailyRateUsd  ?? null,
         status: data.status ?? 'AVAILABLE',
         notes: data.notes,
       },
@@ -68,6 +76,8 @@ export const equipmentService = {
     name: string; brand: string; model: string; serialNumber: string
     type: EquipmentType; capacity: string
     hourlyRate: number; dailyRate: number
+    hourlyRatePen: number; hourlyRateUsd: number
+    dailyRatePen: number; dailyRateUsd: number
     status: EquipmentStatus; notes: string; active: boolean
     odometerKm: number; maintenanceIntervalKm: number; nextMaintenanceKm: number
     currentHours: number
@@ -77,7 +87,10 @@ export const equipmentService = {
     if (data.odometerKm != null && data.maintenanceIntervalKm != null) {
       updateData.nextMaintenanceKm = Math.ceil((data.odometerKm + 1) / data.maintenanceIntervalKm) * data.maintenanceIntervalKm
     }
-    return prisma.equipment.update({ where: { id }, data: updateData })
+    // Sync legacy hourlyRate/dailyRate with PEN values if provided
+    if (data.hourlyRatePen != null) updateData.hourlyRate = data.hourlyRatePen
+    if (data.dailyRatePen  != null) updateData.dailyRate  = data.dailyRatePen
+    return (prisma.equipment as any).update({ where: { id }, data: updateData })
   },
 
   async registerOdometer(companyId: string, equipmentId: string, km: number, notes?: string) {

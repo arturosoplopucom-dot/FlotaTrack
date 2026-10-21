@@ -35,8 +35,12 @@ function buildCategories(equipment: Equipment[]): Category[] {
       const available   = items.filter((e) => e.status === 'AVAILABLE').length
       const maintenance = items.filter((e) => e.status === 'MAINTENANCE').length
       const rates       = items.map((e) => {
-        const r = parseFloat(e.dailyRate) || 0
-        return e.currency === 'USD' ? r * 3.75 : r
+        // Prefiere tarifa diaria en PEN; si solo hay USD convierte a PEN con TC 3.75
+        const pen = parseFloat(String(e.dailyRatePen ?? '')) || 0
+        const usd = parseFloat(String(e.dailyRateUsd ?? '')) || 0
+        if (pen > 0) return pen
+        if (usd > 0) return usd * 3.75
+        return parseFloat(String(e.dailyRate)) || 0
       })
       const avgDailyRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 0
       return {

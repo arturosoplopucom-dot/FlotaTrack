@@ -13,7 +13,7 @@ import { useAuthStore } from '../store/auth.store'
 
 type ProfileForm = { name: string; ruc: string; phone: string; email: string; address: string; logoUrl: string }
 type SmtpForm   = { host: string; port: string; secure: boolean; user: string; pass: string; fromName: string }
-type SunatForm  = { clientId: string; clientSecret: string; usuarioSol: string; claveSol: string; sunatPdfPath: string; cpeToken: string }
+type SunatForm  = { clientId: string; clientSecret: string; usuarioSol: string; claveSol: string; sunatPdfPath: string; cpeToken: string; defaultDetraccionPct: string }
 
 type SyncResult = {
   periodo: string; totalSunat: number
@@ -91,7 +91,7 @@ export default function CompanyProfilePage() {
   const [syncError,   setSyncError]   = useState<string | null>(null)
   const stepsEndRef = useRef<HTMLDivElement>(null)
 
-  const [sunatCfg, setSunatCfg] = useState<{ clientId: string; usuarioSol: string; hasClientSecret: boolean; hasClaveSol: boolean; sunatPdfPath: string; hasCpeToken: boolean } | null>(null)
+  const [sunatCfg, setSunatCfg] = useState<{ clientId: string; usuarioSol: string; hasClientSecret: boolean; hasClaveSol: boolean; sunatPdfPath: string; hasCpeToken: boolean; defaultDetraccionPct?: number } | null>(null)
 
   const profile = useForm<ProfileForm>()
   const smtp    = useForm<SmtpForm>()
@@ -108,7 +108,7 @@ export default function CompanyProfilePage() {
     api.get('/sunat/config').then((r) => {
       if (r.data) {
         setSunatCfg(r.data)
-        sunat.reset({ clientId: r.data.clientId ?? '', usuarioSol: r.data.usuarioSol ?? '', clientSecret: '', claveSol: '', sunatPdfPath: r.data.sunatPdfPath ?? '', cpeToken: '' })
+        sunat.reset({ clientId: r.data.clientId ?? '', usuarioSol: r.data.usuarioSol ?? '', clientSecret: '', claveSol: '', sunatPdfPath: r.data.sunatPdfPath ?? '', cpeToken: '', defaultDetraccionPct: String(r.data.defaultDetraccionPct ?? '') })
       }
     }).catch(() => {})
   }, [])
@@ -159,11 +159,12 @@ export default function CompanyProfilePage() {
         usuarioSol:   data.usuarioSol,
         clientSecret: data.clientSecret  || undefined,
         claveSol:     data.claveSol      || undefined,
-        sunatPdfPath: data.sunatPdfPath  ?? '',
-        cpeToken:     data.cpeToken      || undefined,
+        sunatPdfPath:         data.sunatPdfPath  ?? '',
+        cpeToken:             data.cpeToken      || undefined,
+        defaultDetraccionPct: data.defaultDetraccionPct ? Number(data.defaultDetraccionPct) : 0,
       })
       setSunatCfg(res.data)
-      sunat.reset({ clientId: data.clientId, usuarioSol: data.usuarioSol, clientSecret: '', claveSol: '', sunatPdfPath: data.sunatPdfPath, cpeToken: '' })
+      sunat.reset({ clientId: data.clientId, usuarioSol: data.usuarioSol, clientSecret: '', claveSol: '', sunatPdfPath: data.sunatPdfPath, cpeToken: '', defaultDetraccionPct: String(res.data.defaultDetraccionPct ?? '') })
       setSunatStatus('ok'); setTimeout(() => setSunatStatus('idle'), 3000)
     } catch { setSunatStatus('error'); setTimeout(() => setSunatStatus('idle'), 3000) }
   })
@@ -376,6 +377,24 @@ export default function CompanyProfilePage() {
               </div>
 
               <div style={{ marginBottom: 16 }}>
+                <Field label="% Detracción por defecto (fallback automático)">
+                  <input
+                    {...sunat.register('defaultDetraccionPct')}
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    style={{ ...inpStyle, maxWidth: 140 }}
+                    placeholder="Ej: 10"
+                  />
+                </Field>
+                <p style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 4, marginBottom: 0 }}>
+                  Si la API SUNAT no devuelve el monto de detracción, se calcula automáticamente con este porcentaje.
+                  Típico para arrendamiento de maquinaria: <strong>10%</strong>. Deja en 0 si no aplica.
+                </p>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
                 <Field label="Carpeta PDFs SUNAT Facturador SOL (alternativo)">
                   <input
                     {...sunat.register('sunatPdfPath')}
@@ -455,7 +474,7 @@ export default function CompanyProfilePage() {
                   {[
                     { label: 'En SUNAT',   val: syncResult.totalSunat, color: 'var(--clr-text)' },
                     { label: 'Importadas', val: syncResult.imported,   color: 'var(--clr-success)' },
-                    { label: 'Vinc. a OT', val: syncResult.matched,    color: 'var(--clr-primary)' },
+                    { label: 'Vinc. a Liq.', val: syncResult.matched,   color: 'var(--clr-primary)' },
                     { label: 'Omitidas',   val: syncResult.skipped,    color: '#d97706' },
                   ].map(({ label, val, color }) => (
                     <div key={label} style={{ textAlign: 'center' }}>

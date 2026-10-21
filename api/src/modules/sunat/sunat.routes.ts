@@ -20,7 +20,7 @@ router.get('/config', async (req: AuthRequest, res: Response) => {
 // PATCH /api/sunat/config — guardar credenciales cifradas
 router.patch('/config', async (req: AuthRequest, res: Response) => {
   try {
-    const { clientId, clientSecret, usuarioSol, claveSol, nubefactUrl, nubefactToken, sunatPdfPath, cpeToken } = req.body
+    const { clientId, clientSecret, usuarioSol, claveSol, nubefactUrl, nubefactToken, sunatPdfPath, cpeToken, defaultDetraccionPct } = req.body
     if (!clientId || !usuarioSol) {
       res.status(400).json({ message: 'clientId y usuarioSol son requeridos' })
       return
@@ -43,10 +43,11 @@ router.patch('/config', async (req: AuthRequest, res: Response) => {
       newCfg.claveSolIv  = cl.claveSolIv
       newCfg.claveSolTag = cl.claveSolTag
     }
-    if (nubefactUrl !== undefined)    newCfg.nubefactUrl   = nubefactUrl
-    if (nubefactToken)                newCfg.nubefactToken = nubefactToken
-    if (sunatPdfPath !== undefined)   newCfg.sunatPdfPath  = sunatPdfPath
-    if (cpeToken)                     newCfg.cpeToken      = cpeToken
+    if (nubefactUrl !== undefined)          newCfg.nubefactUrl          = nubefactUrl
+    if (nubefactToken)                      newCfg.nubefactToken        = nubefactToken
+    if (sunatPdfPath !== undefined)         newCfg.sunatPdfPath         = sunatPdfPath
+    if (cpeToken)                           newCfg.cpeToken             = cpeToken
+    if (defaultDetraccionPct !== undefined) newCfg.defaultDetraccionPct = String(defaultDetraccionPct)
 
     await prisma.company.update({
       where: { id: req.user!.companyId },
@@ -65,6 +66,46 @@ router.get('/diag-cpe', async (req: AuthRequest, res: Response) => {
     res.json(result)
   } catch (err: unknown) {
     res.status(500).json({ message: err instanceof Error ? err.message : 'Error' })
+  }
+})
+
+// GET /api/sunat/raw-cpe/:serie/:numero — raw CPE response (debug)
+router.get('/raw-cpe/:serie/:numero', async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await sunatService.rawCpeResponse(req.user!.companyId, req.params.serie, req.params.numero)
+    res.json(result)
+  } catch (err: unknown) {
+    res.status(500).json({ message: err instanceof Error ? err.message : 'Error' })
+  }
+})
+
+// POST /api/sunat/import-clients — importar SOLO clientes desde CSV RVIE (sin crear facturas)
+router.post('/import-clients', async (req: AuthRequest, res: Response) => {
+  try {
+    const { csvContent } = req.body
+    if (!csvContent || typeof csvContent !== 'string') {
+      res.status(400).json({ message: 'Se requiere el campo csvContent (texto del CSV RVIE)' })
+      return
+    }
+    const result = await sunatService.importClientsOnly(req.user!.companyId, csvContent)
+    res.json(result)
+  } catch (err: unknown) {
+    res.status(500).json({ message: err instanceof Error ? err.message : 'Error al importar clientes' })
+  }
+})
+
+// DELETE /api/sunat/invoices — eliminar TODAS las facturas de la empresa (clientes se conservan)
+router.delete('/invoices', async (req: AuthRequest, res: Response) => {
+  try {
+    const { confirm } = req.body
+    if (confirm !== 'BORRAR_TODO') {
+      res.status(400).json({ message: 'Se requiere confirm: "BORRAR_TODO"' })
+      return
+    }
+    const result = await sunatService.deleteAllInvoices(req.user!.companyId)
+    res.json(result)
+  } catch (err: unknown) {
+    res.status(500).json({ message: err instanceof Error ? err.message : 'Error al eliminar facturas' })
   }
 })
 
@@ -111,6 +152,29 @@ router.post('/enrich-cpe', async (req: AuthRequest, res: Response) => {
 
   try {
     const result = await sunatService.enrichFromCpe(
+      req.user!.companyId,
+      (step) => send('progress', { step }),
+    )
+    send('done', result)
+  } catch (err: unknown) {
+    send('error', { message: err instanceof Error ? err.message : 'Error inesperado' })
+  } finally {
+    res.end()
+  }
+})
+
+// POST /api/sunat/enrich-usd — extraer monto original USD desde XMLs locales
+router.post('/enrich-usd', async (req: AuthRequest, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  const send = (type: 'progress' | 'done' | 'error', payload: object) =>
+    res.write(`data: ${JSON.stringify({ type, ...payload })}\n\n`)
+
+  try {
+    const result = await sunatService.enrichUsdAmounts(
       req.user!.companyId,
       (step) => send('progress', { step }),
     )

@@ -12,6 +12,10 @@ export type Equipment = {
   hourlyRate: string
   dailyRate: string
   currency: 'PEN' | 'USD'
+  hourlyRatePen?: string | null
+  hourlyRateUsd?: string | null
+  dailyRatePen?: string | null
+  dailyRateUsd?: string | null
   status: 'AVAILABLE' | 'IN_USE' | 'MAINTENANCE' | 'RETIRED'
   currentHours?: string
   odometerKm?: string | null
@@ -58,36 +62,54 @@ export type WorkOrderCost = {
   amount: string
 }
 
+export type ServiceReportInWO = {
+  id: string
+  number: string
+  reportDate: string
+  startTime?: string | null
+  endTime?: string | null
+  travelKm?: number | null
+  totalHours: number
+  unitRate: number
+  amount: number
+  currency: string
+  workDescription?: string | null
+  equipment?: { name: string } | null
+  operator?: { name: string } | null
+}
+
 export type WorkOrderStatus = 'DRAFT' | 'SENT' | 'ACCEPTED' | 'ACTIVE' | 'COMPLETED' | 'BILLED' | 'PAID' | 'CANCELLED'
 
 export type WorkOrder = {
   id: string
   number: string
   clientId: string
-  equipmentId: string
-  operatorId: string
+  equipmentId?: string | null
+  operatorId?: string | null
   location?: string
   description?: string
   startDate: string
   endDate?: string
   billingType: 'HOURLY' | 'DAILY' | 'FIXED'
+  currency: 'PEN' | 'USD'
   quantity: string
   unitRate: string
   subtotal: string
   status: WorkOrderStatus
   invoiceId?: string
   notes?: string
-  client: { businessName: string; ruc: string; phone?: string; whatsapp?: string; email?: string }
-  equipment: { name: string; type: string }
-  operator: { name: string }
+  client: { businessName: string; ruc: string; phone?: string; whatsapp?: string; email?: string; contactName?: string | null }
+  equipment?: { name: string; type: string } | null
+  operator?: { name: string } | null
   costs: WorkOrderCost[]
   invoice?: { id: string; series: string; number: string; total: string; detraccion: string; status: string; dueDate?: string } | null
   quote?: { id: string; number: string } | null
+  serviceReports?: ServiceReportInWO[]
 }
 
 export type AvailableInvoice = {
-  id: string; series: string; number: string; total: string
-  detraccion: string; issueDate: string; dueDate?: string; status: string
+  id: string; series: string; number: string; total: string; totalUsd?: string | null
+  detraccion: string; issueDate: string; dueDate?: string; status: string; currency?: string
 }
 
 // ─── Equipment ────────────────────────────────────────────────────────────────
@@ -315,7 +337,7 @@ export const useCompany = () =>
   })
 
 export type AnalyticsData = {
-  monthly: { mes: string; emitido: number; cobrado: number }[]
+  monthly: { mes: string; emitido: number; emitidoUsd: number; cobrado: number; cobradoUsd: number }[]
   porCliente: { name: string; pendiente: number }[]
 }
 
@@ -332,7 +354,7 @@ export type PaymentRecord = {
   reference?: string
   paidAt: string
   notes?: string
-  invoice: { series: string; number: string; client: { businessName: string } }
+  invoice: { series: string; number: string; currency: string; client: { businessName: string } }
 }
 
 export type PaymentsPage = {
@@ -352,7 +374,6 @@ export const usePaymentsAll = () =>
   useQuery<PaymentsPage>({
     queryKey: ['payments-all'],
     queryFn: () => api.get('/invoices/payments?page=1&limit=500').then((r) => r.data),
-    staleTime: 2 * 60 * 1000,
   })
 
 export type AvailabilityBlock = {

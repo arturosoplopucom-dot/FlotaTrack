@@ -6,8 +6,10 @@ import { usePaymentsReport } from '../hooks/useReports'
 import AppShell from '../components/AppShell'
 import ExportMenu from '../components/ExportMenu'
 
-const fmt  = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtD = (d: string) => format(parseISO(d), 'dd/MM/yyyy')
+const fmt    = (n: number) => 'S/ ' + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtUsd = (n: number) => '$ '  + n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtAmt = (n: number, currency: string) => currency === 'USD' ? fmtUsd(n) : fmt(n)
+const fmtD   = (d: string) => format(parseISO(d), 'dd/MM/yyyy')
 
 const METHOD_CFG: Record<string, { label: string; color: string; bg: string }> = {
   TRANSFER: { label: 'Transferencia', color: 'var(--clr-primary)',  bg: 'var(--clr-primary-bg)'  },
@@ -40,33 +42,67 @@ export default function PaymentsReportPage() {
   const s     = data?.summary
   const items = data?.items ?? []
 
-  // Método más usado
-  const topMethod = useMemo(() => {
-    if (!s?.byMethod) return null
-    const entries = Object.entries(s.byMethod)
-    if (!entries.length) return null
-    return entries.sort((a, b) => b[1].amount - a[1].amount)[0]
-  }, [s])
+  // ─── Estadísticas por moneda — calculadas desde items (fuente única correcta) ─
+  const stats = useMemo(() => {
+    let penTotal = 0, usdTotal = 0, penCount = 0, usdCount = 0
+    const penByMethod: Record<string, { count: number; amount: number }> = {}
+    const usdByMethod: Record<string, { count: number; amount: number }> = {}
+    const penMonthly:  Record<string, number> = {}
+    const usdMonthly:  Record<string, number> = {}
 
-  // Tendencia mensual — últimos 6 meses ordenados
-  const monthlyEntries = useMemo(() => {
-    if (!s?.monthly) return []
-    return Object.entries(s.monthly).sort((a, b) => a[0].localeCompare(b[0])).slice(-6)
-  }, [s])
-  const maxMonthly = useMemo(() => Math.max(...monthlyEntries.map(([, v]) => v), 1), [monthlyEntries])
+    for (const p of items) {
+      const mk = p.paidAt.slice(0, 7)
+      if (p.currency === 'USD') {
+        usdTotal += p.amount; usdCount++
+        if (!usdByMethod[p.method]) usdByMethod[p.method] = { count: 0, amount: 0 }
+        usdByMethod[p.method].count++; usdByMethod[p.method].amount += p.amount
+        usdMonthly[mk] = (usdMonthly[mk] ?? 0) + p.amount
+      } else {
+        penTotal += p.amount; penCount++
+        if (!penByMethod[p.method]) penByMethod[p.method] = { count: 0, amount: 0 }
+        penByMethod[p.method].count++; penByMethod[p.method].amount += p.amount
+        penMonthly[mk] = (penMonthly[mk] ?? 0) + p.amount
+      }
+    }
+
+    const topPenMethod = Object.entries(penByMethod).sort((a, b) => b[1].amount - a[1].amount)[0] ?? null
+    const topUsdMethod = Object.entries(usdByMethod).sort((a, b) => b[1].amount - a[1].amount)[0] ?? null
+
+    return {
+      penTotal, usdTotal, penCount, usdCount,
+      penAvg: penCount > 0 ? penTotal / penCount : 0,
+      usdAvg: usdCount > 0 ? usdTotal / usdCount : 0,
+      penByMethod, usdByMethod, penMonthly, usdMonthly,
+      topPenMethod, topUsdMethod,
+    }
+  }, [items])
+
+  const penMonthlyEntries = useMemo(() =>
+    Object.entries(stats.penMonthly).sort((a, b) => a[0].localeCompare(b[0])).slice(-6),
+  [stats.penMonthly])
+
+  const usdMonthlyEntries = useMemo(() =>
+    Object.entries(stats.usdMonthly).sort((a, b) => a[0].localeCompare(b[0])).slice(-6),
+  [stats.usdMonthly])
+
+  const maxPenMonthly = useMemo(() => Math.max(...penMonthlyEntries.map(([, v]) => v), 1), [penMonthlyEntries])
+  const maxUsdMonthly = useMemo(() => Math.max(...usdMonthlyEntries.map(([, v]) => v), 1), [usdMonthlyEntries])
+
+  const hasBothCurrencies = stats.penCount > 0 && stats.usdCount > 0
 
   // CSV export
   const exportData = items.map((p) => ({
-    'Fecha':      fmtD(p.paidAt),
-    'Factura':    `${p.invoiceSeries}-${p.invoiceNumber}`,
-    'Cliente':    p.clientName,
-    'RUC':        p.clientRuc,
-    'Método':     METHOD_CFG[p.method]?.label ?? p.method,
-    'Referencia': p.reference ?? '',
-    'Moneda':     p.currency,
-    'Monto':      p.amount,
-    'Total Fac.': p.invoiceTotal,
-    'Notas':      p.notes ?? '',
+    'Fecha':       fmtD(p.paidAt),
+    'Factura':     `${p.invoiceSeries}-${p.invoiceNumber}`,
+    'Cliente':     p.clientName,
+    'RUC':         p.clientRuc,
+    'Moneda':      p.currency,
+    'Método':      METHOD_CFG[p.method]?.label ?? p.method,
+    'Referencia':  p.reference ?? '',
+    'Monto S/':    p.currency !== 'USD' ? fmt(p.amount)    : '',
+    'Monto $':     p.currency === 'USD' ? fmtUsd(p.amount) : '',
+    'Total Fac.':  fmtAmt(p.invoiceTotal, p.currency),
+    'Notas':       p.notes ?? '',
   }))
 
   return (
@@ -116,22 +152,69 @@ export default function PaymentsReportPage() {
 
         {/* KPIs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 24 }}>
-          {[
-            { icon: DollarSign, label: 'Total Cobrado',    value: s ? fmt(s.totalAmount) : '—',  color: 'var(--clr-success)', note: 'Efectivo recibido sin detracción' },
-            { icon: Hash,       label: 'N° de Cobros',     value: s ? String(s.total) : '—',      color: 'var(--clr-primary)', note: undefined },
-            { icon: TrendingUp, label: 'Promedio/Cobro',   value: s ? fmt(s.avgAmount) : '—',    color: 'var(--clr-violet)',  note: undefined },
-            { icon: CreditCard, label: topMethod ? (METHOD_CFG[topMethod[0]]?.label ?? topMethod[0]) : 'Método principal',
-              value: topMethod ? fmt(topMethod[1].amount) : '—', color: '#d97706', note: undefined },
-          ].map((k) => (
-            <div key={k.label} style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderLeft: `4px solid ${k.color}`, borderRadius: 8, padding: '14px 16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <k.icon size={14} style={{ color: k.color }} />
-                <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{k.label}</span>
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)', fontVariantNumeric: 'tabular-nums' }}>{k.value}</div>
-              {k.note && <div style={{ fontSize: 10, marginTop: 4, color: 'var(--clr-text-subtle)' }}>{k.note}</div>}
+
+          {/* Total Cobrado */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderLeft: '4px solid var(--clr-success)', borderRadius: 8, padding: '14px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <DollarSign size={14} style={{ color: 'var(--clr-success)' }} />
+              <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Cobrado</span>
             </div>
-          ))}
+            {stats.penTotal > 0 && <div style={{ fontSize: hasBothCurrencies ? 18 : 22, fontWeight: 700, color: 'var(--clr-text)', fontVariantNumeric: 'tabular-nums' }}>{fmt(stats.penTotal)}</div>}
+            {stats.usdTotal > 0 && <div style={{ fontSize: hasBothCurrencies ? 18 : 22, fontWeight: 700, color: '#2563eb', fontVariantNumeric: 'tabular-nums', marginTop: stats.penTotal > 0 ? 2 : 0 }}>{fmtUsd(stats.usdTotal)}</div>}
+            {stats.penTotal === 0 && stats.usdTotal === 0 && <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)' }}>—</div>}
+            <div style={{ fontSize: 10, marginTop: 4, color: 'var(--clr-text-subtle)' }}>Efectivo recibido sin detracción</div>
+          </div>
+
+          {/* N° de Cobros */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderLeft: '4px solid var(--clr-primary)', borderRadius: 8, padding: '14px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <Hash size={14} style={{ color: 'var(--clr-primary)' }} />
+              <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>N° de Cobros</span>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)', fontVariantNumeric: 'tabular-nums' }}>
+              {s ? s.total : '—'}
+            </div>
+            {hasBothCurrencies && (
+              <div style={{ fontSize: 10, marginTop: 4, color: 'var(--clr-text-subtle)' }}>{stats.penCount} en S/ · {stats.usdCount} en $</div>
+            )}
+          </div>
+
+          {/* Promedio/Cobro — separado por moneda */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderLeft: '4px solid var(--clr-violet)', borderRadius: 8, padding: '14px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <TrendingUp size={14} style={{ color: 'var(--clr-violet)' }} />
+              <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Promedio / Cobro</span>
+            </div>
+            {stats.penCount > 0 && <div style={{ fontSize: hasBothCurrencies ? 16 : 22, fontWeight: 700, color: 'var(--clr-text)', fontVariantNumeric: 'tabular-nums' }}>{fmt(stats.penAvg)}</div>}
+            {stats.usdCount > 0 && <div style={{ fontSize: hasBothCurrencies ? 16 : 22, fontWeight: 700, color: '#2563eb', fontVariantNumeric: 'tabular-nums', marginTop: stats.penCount > 0 ? 2 : 0 }}>{fmtUsd(stats.usdAvg)}</div>}
+            {stats.penCount === 0 && stats.usdCount === 0 && <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)' }}>—</div>}
+            <div style={{ fontSize: 10, marginTop: 4, color: 'var(--clr-text-subtle)' }}>Promedio por moneda</div>
+          </div>
+
+          {/* Método principal */}
+          <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderLeft: '4px solid #d97706', borderRadius: 8, padding: '14px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <CreditCard size={14} style={{ color: '#d97706' }} />
+              <span style={{ fontSize: 11, color: 'var(--clr-text-subtle)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {stats.topPenMethod ? (METHOD_CFG[stats.topPenMethod[0]]?.label ?? stats.topPenMethod[0]) : 'Método principal'}
+              </span>
+            </div>
+            {stats.topPenMethod
+              ? <div style={{ fontSize: hasBothCurrencies ? 16 : 22, fontWeight: 700, color: 'var(--clr-text)', fontVariantNumeric: 'tabular-nums' }}>{fmt(stats.topPenMethod[1].amount)}</div>
+              : <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--clr-text)' }}>—</div>
+            }
+            {stats.topUsdMethod && (
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#2563eb', fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>
+                {fmtUsd(stats.topUsdMethod[1].amount)}
+                {stats.topUsdMethod[0] !== stats.topPenMethod?.[0] && (
+                  <span style={{ fontSize: 10, fontWeight: 400, color: 'var(--clr-text-subtle)', marginLeft: 4 }}>
+                    ({METHOD_CFG[stats.topUsdMethod[0]]?.label ?? stats.topUsdMethod[0]})
+                  </span>
+                )}
+              </div>
+            )}
+            <div style={{ fontSize: 10, marginTop: 4, color: 'var(--clr-text-subtle)' }}>Mayor monto cobrado</div>
+          </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
@@ -139,28 +222,62 @@ export default function PaymentsReportPage() {
           {/* Por método */}
           <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: 18 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-text-muted)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Por Método de Pago</div>
-            {s && Object.keys(s.byMethod).length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {Object.entries(s.byMethod).sort((a, b) => b[1].amount - a[1].amount).map(([m, v]) => {
-                  const cfg = METHOD_CFG[m] ?? { label: m, color: 'var(--clr-text-subtle)', bg: 'var(--clr-surface-hover)' }
-                  const pct = s.totalAmount > 0 ? (v.amount / s.totalAmount) * 100 : 0
-                  return (
-                    <div key={m}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-                        <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: cfg.bg, color: cfg.color, fontWeight: 600 }}>{cfg.label}</span>
-                        <div style={{ textAlign: 'right' }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-text)' }}>{fmt(v.amount)}</span>
-                          <span style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginLeft: 6 }}>{v.count} cobros</span>
+
+            {/* Soles */}
+            {Object.keys(stats.penByMethod).length > 0 && (
+              <>
+                {hasBothCurrencies && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', marginBottom: 8, textTransform: 'uppercase' }}>Soles (S/)</div>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {Object.entries(stats.penByMethod).sort((a, b) => b[1].amount - a[1].amount).map(([m, v]) => {
+                    const cfg = METHOD_CFG[m] ?? { label: m, color: 'var(--clr-text-subtle)', bg: 'var(--clr-surface-hover)' }
+                    const pct = stats.penTotal > 0 ? (v.amount / stats.penTotal) * 100 : 0
+                    return (
+                      <div key={m}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                          <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: cfg.bg, color: cfg.color, fontWeight: 600 }}>{cfg.label}</span>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-text)' }}>{fmt(v.amount)}</span>
+                            <span style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginLeft: 6 }}>{v.count} cobro{v.count !== 1 ? 's' : ''}</span>
+                          </div>
+                        </div>
+                        <div style={{ height: 5, background: 'var(--clr-border)', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: cfg.color, borderRadius: 3, transition: 'width 0.4s ease' }} />
                         </div>
                       </div>
-                      <div style={{ height: 5, background: 'var(--clr-border)', borderRadius: 3, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${pct}%`, background: cfg.color, borderRadius: 3, transition: 'width 0.4s ease' }} />
+                    )
+                  })}
+                </div>
+              </>
+            )}
+
+            {/* Dólares */}
+            {Object.keys(stats.usdByMethod).length > 0 && (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#2563eb', margin: `${hasBothCurrencies ? 16 : 0}px 0 8px`, textTransform: 'uppercase' }}>Dólares ($)</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {Object.entries(stats.usdByMethod).sort((a, b) => b[1].amount - a[1].amount).map(([m, v]) => {
+                    const cfg = METHOD_CFG[m] ?? { label: m, color: 'var(--clr-text-subtle)', bg: 'var(--clr-surface-hover)' }
+                    const pct = stats.usdTotal > 0 ? (v.amount / stats.usdTotal) * 100 : 0
+                    return (
+                      <div key={m}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                          <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 4, background: '#dbeafe', color: '#1d4ed8', fontWeight: 600 }}>{cfg.label}</span>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: '#2563eb' }}>{fmtUsd(v.amount)}</span>
+                            <span style={{ fontSize: 10, color: 'var(--clr-text-subtle)', marginLeft: 6 }}>{v.count} cobro{v.count !== 1 ? 's' : ''}</span>
+                          </div>
+                        </div>
+                        <div style={{ height: 5, background: 'var(--clr-border)', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: '#3b82f6', borderRadius: 3, transition: 'width 0.4s ease' }} />
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
+                    )
+                  })}
+                </div>
+              </>
+            )}
+
+            {Object.keys(stats.penByMethod).length === 0 && Object.keys(stats.usdByMethod).length === 0 && (
               <div style={{ color: 'var(--clr-text-subtle)', fontSize: 12, textAlign: 'center', padding: 24 }}>Sin datos</div>
             )}
           </div>
@@ -168,17 +285,40 @@ export default function PaymentsReportPage() {
           {/* Tendencia mensual */}
           <div style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10, padding: 18 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-text-muted)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tendencia Mensual</div>
-            {monthlyEntries.length > 0 ? (
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 100 }}>
-                {monthlyEntries.map(([key, val]) => (
-                  <div key={key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                    <div style={{ fontSize: 9, color: 'var(--clr-text-subtle)', fontWeight: 600 }}>{fmt(val).replace('S/ ', '')}</div>
-                    <div style={{ width: '100%', background: 'var(--clr-success)', borderRadius: '3px 3px 0 0', height: `${Math.max((val / maxMonthly) * 72, 4)}px`, transition: 'height 0.4s ease' }} />
-                    <div style={{ fontSize: 9, color: 'var(--clr-text-subtle)' }}>{key.slice(5)}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
+
+            {/* Barras soles */}
+            {penMonthlyEntries.length > 0 && (
+              <>
+                {hasBothCurrencies && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', marginBottom: 6, textTransform: 'uppercase' }}>Soles (S/)</div>}
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: hasBothCurrencies ? 72 : 100 }}>
+                  {penMonthlyEntries.map(([key, val]) => (
+                    <div key={key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                      <div style={{ fontSize: 9, color: 'var(--clr-text-subtle)', fontWeight: 600 }}>{fmt(val).replace('S/ ', '')}</div>
+                      <div style={{ width: '100%', background: 'var(--clr-success)', borderRadius: '3px 3px 0 0', height: `${Math.max((val / maxPenMonthly) * (hasBothCurrencies ? 44 : 72), 4)}px`, transition: 'height 0.4s ease' }} />
+                      <div style={{ fontSize: 9, color: 'var(--clr-text-subtle)' }}>{key.slice(5)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Barras dólares */}
+            {usdMonthlyEntries.length > 0 && (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#2563eb', margin: `${penMonthlyEntries.length > 0 ? 12 : 0}px 0 6px`, textTransform: 'uppercase' }}>Dólares ($)</div>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: hasBothCurrencies ? 72 : 100 }}>
+                  {usdMonthlyEntries.map(([key, val]) => (
+                    <div key={key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                      <div style={{ fontSize: 9, color: '#2563eb', fontWeight: 600 }}>{fmtUsd(val).replace('$ ', '')}</div>
+                      <div style={{ width: '100%', background: '#3b82f6', borderRadius: '3px 3px 0 0', height: `${Math.max((val / maxUsdMonthly) * (hasBothCurrencies ? 44 : 72), 4)}px`, transition: 'height 0.4s ease' }} />
+                      <div style={{ fontSize: 9, color: 'var(--clr-text-subtle)' }}>{key.slice(5)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {penMonthlyEntries.length === 0 && usdMonthlyEntries.length === 0 && (
               <div style={{ color: 'var(--clr-text-subtle)', fontSize: 12, textAlign: 'center', padding: 24 }}>Sin datos</div>
             )}
           </div>
@@ -202,14 +342,17 @@ export default function PaymentsReportPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: 'var(--clr-bg)' }}>
-                    {['Fecha', 'Factura', 'Cliente', 'Método', 'Referencia', 'Monto'].map((h) => (
-                      <th key={h} style={{ padding: '9px 14px', textAlign: h === 'Monto' ? 'right' : 'left', fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                    {['Fecha', 'Factura', 'Cliente', 'Método', 'Referencia'].map((h) => (
+                      <th key={h} style={{ padding: '9px 14px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
+                    <th style={{ padding: '9px 14px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--clr-text-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Monto S/</th>
+                    <th style={{ padding: '9px 14px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Monto $</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((p, i) => {
                     const cfg = METHOD_CFG[p.method] ?? { label: p.method, color: 'var(--clr-text-subtle)', bg: 'var(--clr-surface-hover)' }
+                    const isUsd = p.currency === 'USD'
                     return (
                       <tr key={p.id} style={{ borderTop: '1px solid var(--clr-border)', background: i % 2 === 0 ? 'transparent' : 'var(--clr-bg)' }}>
                         <td style={{ padding: '9px 14px', color: 'var(--clr-text-muted)', whiteSpace: 'nowrap' }}>{fmtD(p.paidAt)}</td>
@@ -219,7 +362,12 @@ export default function PaymentsReportPage() {
                           <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: cfg.bg, color: cfg.color, fontWeight: 700 }}>{cfg.label}</span>
                         </td>
                         <td style={{ padding: '9px 14px', color: 'var(--clr-text-subtle)', fontFamily: 'monospace', fontSize: 11 }}>{p.reference ?? '—'}</td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--clr-success)', whiteSpace: 'nowrap' }}>{fmt(p.amount)}</td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--clr-success)', whiteSpace: 'nowrap' }}>
+                          {!isUsd ? fmt(p.amount) : <span style={{ color: 'var(--clr-text-subtle)', fontWeight: 400 }}>—</span>}
+                        </td>
+                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: '#2563eb', whiteSpace: 'nowrap' }}>
+                          {isUsd ? fmtUsd(p.amount) : <span style={{ color: 'var(--clr-text-subtle)', fontWeight: 400 }}>—</span>}
+                        </td>
                       </tr>
                     )
                   })}
@@ -227,7 +375,12 @@ export default function PaymentsReportPage() {
                 <tfoot>
                   <tr style={{ borderTop: '2px solid var(--clr-border)', background: 'var(--clr-bg)' }}>
                     <td colSpan={5} style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Total</td>
-                    <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: 'var(--clr-success)', fontVariantNumeric: 'tabular-nums' }}>{s ? fmt(s.totalAmount) : '—'}</td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: 'var(--clr-success)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                      {stats.penTotal > 0 ? fmt(stats.penTotal) : '—'}
+                    </td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 13, color: '#2563eb', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                      {stats.usdTotal > 0 ? fmtUsd(stats.usdTotal) : '—'}
+                    </td>
                   </tr>
                 </tfoot>
               </table>

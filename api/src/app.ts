@@ -13,6 +13,7 @@ import sunatRoutes from './modules/sunat/sunat.routes'
 import quotesRoutes from './modules/quotes/quotes.routes'
 import maintenanceRoutes from './modules/maintenance/maintenance.routes'
 import reportsRoutes from './modules/reports/reports.routes'
+import serviceReportsRoutes from './modules/service-reports/service-reports.routes'
 
 const app = express()
 
@@ -33,6 +34,7 @@ app.use('/api/sunat', sunatRoutes)
 app.use('/api/quotes', quotesRoutes)
 app.use('/api/maintenance', maintenanceRoutes)
 app.use('/api/reports', reportsRoutes)
+app.use('/api/service-reports', serviceReportsRoutes)
 
 app.use(errorHandler)
 

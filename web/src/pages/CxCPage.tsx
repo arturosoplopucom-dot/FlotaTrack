@@ -13,7 +13,7 @@ import { WhatsAppIcon } from '../components/WhatsAppIcon'
 import { api } from '../lib/api'
 import AppShell from '../components/AppShell'
 import { useQueryClient } from '@tanstack/react-query'
-import { useInvoices, useUpdateInvoice, useDashboard, type Invoice } from '../hooks/useInvoices'
+import { useInvoices, useUpdateInvoice, useDashboard, invalidatePaymentQueries, type Invoice } from '../hooks/useInvoices'
 import { PaymentModal } from '../components/PaymentModal'
 import { useCompany } from '../hooks/useFlota'
 import { useAuthStore } from '../store/auth.store'
@@ -23,6 +23,11 @@ import { downloadInvoicePDFLocal, previewInvoicePDFUrl } from '../components/Inv
 
 const fmt = (n: number | string) =>
   'S/ ' + Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+const fmtCur = (n: number | string, currency?: string) => {
+  const num = Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return currency === 'USD' ? `$ ${num}` : `S/ ${num}`
+}
 
 const borderColor: Record<string, string> = {
   OVERDUE: 'var(--clr-danger)', PARTIAL: '#d97706', PENDING: 'var(--clr-primary)', PAID: 'var(--clr-success)',
@@ -145,8 +150,7 @@ export default function CxCPage() {
       })
       const { updated } = res.data as { updated: number; total: number }
       setBulkResult(`✅ ${updated} factura${updated !== 1 ? 's' : ''} marcada${updated !== 1 ? 's' : ''} como cobrada${updated !== 1 ? 's' : ''}`)
-      qc.invalidateQueries({ queryKey: ['invoices'] })
-      qc.invalidateQueries({ queryKey: ['dashboard'] })
+      invalidatePaymentQueries(qc)
       setSelectedIds(new Set())
       setTimeout(exitSelection, 2500)
     } catch (e: any) {
@@ -178,16 +182,18 @@ export default function CxCPage() {
     return () => clearTimeout(t)
   }, [search])
 
-  const serverStatus = activeTab === 'ALL' || activeTab === 'SOON' ? '' : activeTab
+  const isNoDetTab   = activeTab === 'NO_DET'
+  const serverStatus = activeTab === 'ALL' || activeTab === 'SOON' || isNoDetTab ? '' : activeTab
   const { data, isLoading } = useInvoices({
     ...(serverStatus ? { status: serverStatus } : {}),
+    ...(isNoDetTab ? { noDetraccion: 'true' } : {}),
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
     page: String(page),
     limit: '50',
   })
   const updateInvoice = useUpdateInvoice()
 
-  // "Por vencer" es filtro client-side sobre los resultados del servidor (no usa status en DB)
+  // "Por vencer" es filtro client-side; "Sin detracción" ya viene filtrado del servidor
   const filteredItems = (data?.items ?? []).filter((inv) => {
     if (activeTab === 'SOON') {
       if (inv.daysUntilDue <= 0 || inv.status === 'PAID') return false
@@ -196,22 +202,25 @@ export default function CxCPage() {
   })
 
   // Counts for tabs — dashboard usa buckets mutuamente excluyentes que suman al total real
-  const { data: countAll } = useInvoices({ limit: '1' })
+  const { data: countAll }    = useInvoices({ limit: '1' })
+  const { data: countNoDet }  = useInvoices({ limit: '1', noDetraccion: 'true' })
 
   const totalN   = countAll?.total            ?? 0
   const overdueN = dashboard?.overdue.count   ?? 0
   const soonN    = dashboard?.dueSoon.count   ?? 0
   const currentN = dashboard?.current.count   ?? 0
   const paidN    = dashboard?.paid.count      ?? 0
+  const noDetN   = countNoDet?.total          ?? 0
   // Pendientes = current (no vencidas, no por vencer, no pagadas)
   const pendingN = currentN
 
   const tabs = [
-    { key: 'ALL',     label: 'Todas',      badge: totalN },
-    { key: 'PENDING', label: 'Pendientes', badge: pendingN },
-    { key: 'OVERDUE', label: 'Vencidas',   badge: overdueN },
-    { key: 'SOON',    label: 'Por vencer', badge: soonN },
-    { key: 'PAID',    label: 'Pagadas',    badge: paidN },
+    { key: 'ALL',     label: 'Todas',           badge: totalN,   badgeColor: undefined },
+    { key: 'PENDING', label: 'Pendientes',       badge: pendingN, badgeColor: undefined },
+    { key: 'OVERDUE', label: 'Vencidas',         badge: overdueN, badgeColor: undefined },
+    { key: 'SOON',    label: 'Por vencer',       badge: soonN,    badgeColor: undefined },
+    { key: 'PAID',    label: 'Pagadas',          badge: paidN,    badgeColor: undefined },
+    { key: 'NO_DET',  label: 'Sin detracción',   badge: noDetN,   badgeColor: noDetN > 0 ? '#ea580c' : undefined },
   ]
 
   function saveDetraccion(inv: Invoice) {
@@ -373,8 +382,22 @@ export default function CxCPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
-  const totalPending = dashboard ? dashboard.overdue.amount + dashboard.dueSoon.amount + dashboard.current.amount : 0
-  const overdueCount = dashboard?.overdue.count ?? 0
+  const totalPending    = dashboard ? dashboard.overdue.amount + dashboard.dueSoon.amount + dashboard.current.amount : 0
+  const totalPendingUsd = dashboard ? (dashboard.overdue.amountUsd ?? 0) + (dashboard.dueSoon.amountUsd ?? 0) + (dashboard.current.amountUsd ?? 0) : 0
+  const overdueCount    = dashboard?.overdue.count ?? 0
+
+  const DualAmt = ({ pen, usd, bold = true }: { pen: number; usd?: number; bold?: boolean }) => (
+    <div>
+      <div style={{ fontSize: bold ? 20 : 14, fontWeight: bold ? 700 : 600, color: 'var(--clr-text)', lineHeight: 1.2 }}>
+        {fmt(pen)}
+      </div>
+      {(usd ?? 0) > 0.005 && (
+        <div style={{ fontSize: bold ? 13 : 11, fontWeight: 600, color: '#1d4ed8', marginTop: 2 }}>
+          $ {Number(usd).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <AppShell active="cxc" title="Cobranza">
@@ -385,7 +408,7 @@ export default function CxCPage() {
           <div>
             <h1 className="text-2xl font-bold" style={{ color: 'var(--clr-text)' }}>Cobranza</h1>
             <p className="text-sm mt-0.5" style={{ color: 'var(--clr-text-subtle)' }}>
-              CxC activa: {fmt(totalPending)} · {overdueCount} factura{overdueCount !== 1 ? 's' : ''} vencida{overdueCount !== 1 ? 's' : ''}
+              CxC activa: {fmt(totalPending)}{totalPendingUsd > 0.005 ? ` + $ ${totalPendingUsd.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ''} · {overdueCount} factura{overdueCount !== 1 ? 's' : ''} vencida{overdueCount !== 1 ? 's' : ''}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -476,25 +499,32 @@ export default function CxCPage() {
         <div className="flex items-start gap-6 flex-wrap">
           {/* Tabs */}
           <div className="flex gap-1 p-1 rounded-xl flex-1" style={{ background: 'var(--clr-sidebar)', border: '1px solid var(--clr-border)' }}>
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => { setActiveTab(t.key); setPage(1) }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex-1 justify-center"
-                style={{
-                  background: activeTab === t.key ? 'var(--clr-primary)' : 'transparent',
-                  color: activeTab === t.key ? 'var(--clr-on-primary)' : 'var(--clr-text-subtle)',
-                  border: 'none',
-                }}
-              >
-                {t.label}
-                {t.badge > 0 && (
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: 'var(--clr-danger)', color: 'white' }}>
-                    {t.badge}
-                  </span>
-                )}
-              </button>
-            ))}
+            {tabs.map((t) => {
+              const isActive = activeTab === t.key
+              const isNoDet  = t.key === 'NO_DET'
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => { setActiveTab(t.key); setPage(1) }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex-1 justify-center"
+                  style={{
+                    background: isActive ? (isNoDet ? '#ea580c' : 'var(--clr-primary)') : 'transparent',
+                    color: isActive ? '#fff' : isNoDet && t.badge > 0 ? '#ea580c' : 'var(--clr-text-subtle)',
+                    border: 'none',
+                  }}
+                >
+                  {t.label}
+                  {t.badge > 0 && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{
+                      background: isActive ? 'rgba(255,255,255,0.25)' : (t.badgeColor ?? 'var(--clr-danger)'),
+                      color: 'white',
+                    }}>
+                      {t.badge}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
           </div>
 
           {/* Search */}
@@ -518,8 +548,8 @@ export default function CxCPage() {
                 <Clock size={13} style={{ color: 'var(--clr-primary-lt)' }} />
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--clr-primary-lt)' }}>Por vencer</span>
               </div>
-              <div className="text-xl font-bold" style={{ color: 'var(--clr-text)' }}>{fmt(dashboard.dueSoon.amount)}</div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--clr-text-subtle)' }}>{dashboard.dueSoon.count} facturas</div>
+              <DualAmt pen={dashboard.dueSoon.amount} usd={dashboard.dueSoon.amountUsd} />
+              <div className="text-xs mt-1" style={{ color: 'var(--clr-text-subtle)' }}>{dashboard.dueSoon.count} facturas</div>
               <div className="text-[10px] mt-1" style={{ color: 'var(--clr-text-subtle)' }}>Saldo neto sin detracción</div>
             </div>
             <div className="rounded-xl px-5 py-4" style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderTop: '2px solid var(--clr-danger)' }}>
@@ -527,8 +557,8 @@ export default function CxCPage() {
                 <TrendingDown size={13} style={{ color: 'var(--clr-danger)' }} />
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--clr-danger)' }}>Vencidas</span>
               </div>
-              <div className="text-xl font-bold" style={{ color: 'var(--clr-text)' }}>{fmt(dashboard.overdue.amount)}</div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--clr-text-subtle)' }}>{dashboard.overdue.count} facturas</div>
+              <DualAmt pen={dashboard.overdue.amount} usd={dashboard.overdue.amountUsd} />
+              <div className="text-xs mt-1" style={{ color: 'var(--clr-text-subtle)' }}>{dashboard.overdue.count} facturas</div>
               <div className="text-[10px] mt-1" style={{ color: 'var(--clr-text-subtle)' }}>Saldo neto sin detracción</div>
             </div>
             <div className="rounded-xl px-5 py-4" style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderTop: '2px solid var(--clr-success)' }}>
@@ -536,8 +566,8 @@ export default function CxCPage() {
                 <CheckCircle2 size={13} style={{ color: 'var(--clr-success)' }} />
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--clr-success)' }}>Cobrado (historial)</span>
               </div>
-              <div className="text-xl font-bold" style={{ color: 'var(--clr-text)' }}>{fmt(dashboard.paid.amount)}</div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--clr-text-subtle)' }}>{dashboard.paid.count} facturas</div>
+              <DualAmt pen={dashboard.paid.amount} usd={dashboard.paid.amountUsd} />
+              <div className="text-xs mt-1" style={{ color: 'var(--clr-text-subtle)' }}>{dashboard.paid.count} facturas</div>
               <div className="text-[10px] mt-1" style={{ color: 'var(--clr-text-subtle)' }}>Valor facturado incl. detracción</div>
             </div>
           </div>
@@ -651,9 +681,22 @@ export default function CxCPage() {
                     <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 20, flexShrink: 0, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, textTransform: 'uppercase' as const, letterSpacing: '0.06em' }}>
                       {label}
                     </span>
-                    <span style={{ fontSize: 15, fontWeight: 800, color: inv.status === 'PAID' ? 'var(--clr-success)' : isOverdue ? 'var(--clr-danger)' : 'var(--clr-text)', fontFamily: 'monospace', flexShrink: 0 }}>
-                      {fmt(inv.status === 'PAID' ? Number(inv.total) : saldo)}
-                    </span>
+                    {/* Monto principal: USD si está disponible, PEN como fallback */}
+                    {inv.currency === 'USD' && inv.totalUsd ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 }}>
+                        <span style={{ fontSize: 15, fontWeight: 800, color: inv.status === 'PAID' ? 'var(--clr-success)' : isOverdue ? 'var(--clr-danger)' : 'var(--clr-text)', fontFamily: 'monospace' }}>
+                          {fmtCur(inv.status === 'PAID' ? Number(inv.totalUsd) : Math.max(0, Number(inv.totalUsd) - (paid / (Number(inv.total) / Number(inv.totalUsd) || 1))), 'USD')}
+                        </span>
+                        <span style={{ fontSize: 10, color: 'var(--clr-text-subtle)', fontFamily: 'monospace' }}>
+                          ≈ {fmt(inv.status === 'PAID' ? Number(inv.total) : saldo)}
+                          {inv.tcambio && <span> TC {Number(inv.tcambio).toFixed(3)}</span>}
+                        </span>
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 15, fontWeight: 800, color: inv.status === 'PAID' ? 'var(--clr-success)' : isOverdue ? 'var(--clr-danger)' : 'var(--clr-text)', fontFamily: 'monospace', flexShrink: 0 }}>
+                        {fmt(inv.status === 'PAID' ? Number(inv.total) : saldo)}
+                      </span>
+                    )}
                   </div>
 
                   {/* ── Row 2: Invoice · Description ── */}
@@ -665,7 +708,9 @@ export default function CxCPage() {
                         Pagado {fmt(paid)} · Total {fmt(Number(inv.total))}
                       </span>
                     )}
-                    {inv.currency === 'USD' && <span style={{ marginLeft: 8, fontWeight: 700, color: '#d97706' }}> USD</span>}
+                    {inv.currency === 'USD' && (
+                      <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3, background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0' }}>USD</span>
+                    )}
                   </div>
 
                   {/* ── OTs vinculadas ── */}
@@ -687,9 +732,9 @@ export default function CxCPage() {
                           <div key={wo.id} style={{ background: 'var(--clr-bg)', border: '1px solid var(--clr-border)', borderLeft: '3px solid var(--clr-violet)', borderRadius: 7, padding: '7px 11px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                               <Wrench size={10} style={{ color: 'var(--clr-violet)', flexShrink: 0 }} />
-                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--clr-violet)' }}>OT {wo.number}</span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--clr-violet)' }}>LIQ {wo.number}</span>
                               <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: woColor.bg, color: woColor.text, fontWeight: 700 }}>{woLabel}</span>
-                              <span style={{ fontSize: 10, color: 'var(--clr-text-subtle)', display: 'flex', alignItems: 'center', gap: 3 }}><Truck size={9} /> {wo.equipment.name}</span>
+                              {wo.equipment && <span style={{ fontSize: 10, color: 'var(--clr-text-subtle)', display: 'flex', alignItems: 'center', gap: 3 }}><Truck size={9} /> {wo.equipment.name}</span>}
                             </div>
                             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--clr-text)', fontFamily: 'monospace' }}>{fmt(Number(wo.subtotal))}</span>
                           </div>
@@ -889,7 +934,7 @@ export default function CxCPage() {
         )}
       </div>
 
-      <PaymentModal invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} />
+      <PaymentModal key={selectedInvoice?.id ?? ''} invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} />
 
       {/* ── Modal Vista Previa Factura ─────────────────────────────────────── */}
       {previewInv && (

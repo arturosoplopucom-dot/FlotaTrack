@@ -10,6 +10,7 @@ type InvoiceData = {
   amount: Decimal | number
   igv: Decimal | number
   total: Decimal | number
+  totalUsd?: Decimal | number | null
   detraccion: Decimal | number
   detraccionCode?: string | null
   cuentaBN?: string | null
@@ -159,6 +160,7 @@ type PdfData = {
   lines: PdfLine[]
   baseImponible: number; igv: number; total: number
   detraccionCode: string; detraccionPct: number; detraccionAmount: number
+  detraccionAmountPen?: number
   cuentaBN: string
   currency: string
   status?: string
@@ -477,17 +479,20 @@ async function renderSunatPdf(data: PdfData, co: CompanyData): Promise<Buffer> {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7); setColor(GRAY)
     doc.text('Monto de Detracción:', DX2 + 2, dy)
     doc.setFont('helvetica', 'bold'); doc.setFontSize(9); setColor(DARK)
-    doc.text(`${currSym} ${fmt(data.detraccionAmount)}`, DR, dy + 5, { align: 'right' })
+    doc.text(`S/ ${fmt(data.detraccionAmountPen ?? data.detraccionAmount)}`, DR, dy + 5, { align: 'right' })
 
     y += DETR_H + 3
+  }
 
-    // Crédito: monto neto
+  // Monto neto + cuotas para facturas a crédito (con o sin detracción)
+  if (formaPago !== 'CONTADO') {
+    const netoCredito = data.total - (data.detraccionAmount ?? 0)
     setDraw(LGRAY); doc.setLineWidth(0.4)
     strokeRect(ML, y, MR - ML, 9)
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); setColor(GRAY)
     doc.text('Monto Neto Pendiente de Pago:', ML + 3, y + 5.5)
     doc.setFont('helvetica', 'bold'); doc.setFontSize(9); setColor(DARK)
-    doc.text(`${currSym} ${fmt(neto)}`, ML + 78, y + 5.5)
+    doc.text(`${currSym} ${fmt(netoCredito)}`, ML + 78, y + 5.5)
 
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); setColor(GRAY)
     doc.text('Total de Cuotas:', MR - 75, y + 5.5)
@@ -503,7 +508,7 @@ async function renderSunatPdf(data: PdfData, co: CompanyData): Promise<Buffer> {
     setDraw(LGRAY); doc.setLineWidth(0.3)
     strokeRect(ML, y, MR - ML, 6)
     doc.setFont('helvetica', 'bold'); doc.setFontSize(7); setColor(DARK)
-    const CX1 = ML + 20, CX2 = ML + 90, CX3 = ML + 150
+    const CX1 = ML + 20, CX3 = ML + 150
     doc.text('Nº Cuota', ML + 10, y + 4, { align: 'center' })
     doc.text('Fec. Vencimiento', CX1 + 35, y + 4, { align: 'center' })
     doc.text('Monto', CX3 + 10, y + 4, { align: 'center' })
@@ -515,7 +520,7 @@ async function renderSunatPdf(data: PdfData, co: CompanyData): Promise<Buffer> {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8); setColor(DARK)
     doc.text('01', ML + 10, y + 5, { align: 'center' })
     doc.text(DUE, CX1 + 35, y + 5, { align: 'center' })
-    doc.text(`${currSym} ${fmt(neto)}`, CX3 + 10, y + 5, { align: 'center' })
+    doc.text(`${currSym} ${fmt(netoCredito)}`, CX3 + 10, y + 5, { align: 'center' })
     vline(CX1, y, y + 7); vline(CX3, y, y + 7)
     y += 11
   }
@@ -560,13 +565,22 @@ export async function generateInvoicePdfServer(
   inv: InvoiceData,
   company: CompanyData,
 ): Promise<Buffer> {
-  const total         = Number(inv.total)
-  const baseImponible = Number(inv.amount) > 0 ? Number(inv.amount) : total / 1.18
-  const igv           = Number(inv.igv) > 0 ? Number(inv.igv) : total - baseImponible
-  const detracAmt     = Number(inv.detraccion ?? 0)
+  const currency  = inv.currency ?? 'PEN'
+  const totalPen  = Number(inv.total)
+  const usdAmt    = inv.totalUsd ? Number(inv.totalUsd) : null
+  const isUsd     = currency === 'USD' && usdAmt !== null && usdAmt > 0
+
+  // When USD: all monetary values are converted from PEN using the ratio
+  const ratio         = isUsd ? usdAmt! / totalPen : 1
+  const total         = isUsd ? usdAmt! : totalPen
+  const baseImponible = Number(inv.amount) > 0 ? Number(inv.amount) * ratio : total / 1.18
+  const igv           = Number(inv.igv) > 0 ? Number(inv.igv) * ratio : total - baseImponible
+  const detracPen     = Number(inv.detraccion ?? 0)
+  const detracAmt     = detracPen * ratio
   const detracCode    = inv.detraccionCode ?? ''
+  // Round to 1 decimal first so 9.977% → 10.0% matches SUNAT's statutory rate
   const detracPct     = detracAmt > 0
-    ? Math.round((detracAmt / total) * 10000) / 100
+    ? Math.round((detracAmt / total) * 1000) / 10
     : 0
 
   const line: PdfLine = {
@@ -589,11 +603,12 @@ export async function generateInvoicePdfServer(
     baseImponible,
     igv,
     total,
-    detraccionCode:   detracCode,
-    detraccionPct:    detracPct,
-    detraccionAmount: detracAmt,
-    cuentaBN:         inv.cuentaBN ?? '',
-    currency:         inv.currency ?? 'PEN',
+    detraccionCode:      detracCode,
+    detraccionPct:       detracPct,
+    detraccionAmount:    detracAmt,
+    detraccionAmountPen: detracPen,
+    cuentaBN:            inv.cuentaBN ?? '',
+    currency,
     status:           inv.status,
   }, company)
 }

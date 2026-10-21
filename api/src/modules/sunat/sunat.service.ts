@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import AdmZip from 'adm-zip'
+import { Prisma } from '@prisma/client'
 import { prisma } from '../../config/database'
 import { generateInvoicePdfFromXml } from '../invoices/invoice-pdf.server'
 
@@ -23,6 +24,33 @@ const POLL_TIMEOUT_MS  = 8 * 60 * 1000  // 8 min
 // ─── In-memory token cache (sustituye Redis) ──────────────────────────────────
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>()
+
+// ─── SBS Tipo de Cambio Venta (cache por fecha) ───────────────────────────────
+// SUNAT SPOT usa el TC de venta SBS de la fecha de emisión. El SIRE CSV puede
+// exportar un TC diferente (promedio mensual), lo que causa detracciones incorrectas.
+
+const sbsTcCache = new Map<string, number>()
+
+async function getSbsTipoCambioVenta(fecha: Date): Promise<number> {
+  const fechaStr = fecha.toISOString().slice(0, 10)  // YYYY-MM-DD
+  if (sbsTcCache.has(fechaStr)) return sbsTcCache.get(fechaStr)!
+  try {
+    // BCRP API: TC sistema bancario SBS venta (S/ por US$) — gratuito, sin API key
+    const url = `https://estadisticas.bcrp.gob.pe/estadisticas/series/api/PD04640PD/json/${fechaStr}/${fechaStr}/`
+    const res  = await fetch(url, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return 0
+    // BCRP API puede incluir HTML de debug (xdebug PHP) después del JSON — cortar antes del <
+    const text    = await res.text()
+    const htmlPos = text.indexOf('<')
+    const jsonStr = htmlPos > 0 ? text.slice(0, htmlPos).trim() : text.trim()
+    const data    = JSON.parse(jsonStr) as { periods?: Array<{ values: string[] }> }
+    const tc   = parseFloat(data.periods?.[0]?.values?.[0] ?? '0')
+    if (tc > 1) sbsTcCache.set(fechaStr, tc)
+    return tc > 1 ? tc : 0
+  } catch {
+    return 0
+  }
+}
 
 // ─── Encryption (AES-256-GCM con clave derivada de JWT_SECRET) ────────────────
 
@@ -204,6 +232,8 @@ async function getTokenForScope(
 type CpeDetail = {
   detraccion: number
   dueDate: Date | null
+  importeTotal?: number   // en la moneda original del comprobante
+  moneda?: string         // USD | PEN | etc.
 }
 
 async function getCpeDetail(
@@ -238,6 +268,7 @@ async function getCpeDetail(
     montoDetraccion?: number
     porcentajeDetraccion?: number
     importeTotal?: number
+    moneda?: string
     cuotas?: { fechaVencimiento?: string; monto?: number }[]
     fechaVencimiento?: string
   }
@@ -247,8 +278,8 @@ async function getCpeDetail(
   if (data.montoDetraccion) {
     detraccion = data.montoDetraccion
   } else if (data.porcentajeDetraccion && data.importeTotal) {
-    // net = total × (1 - tasa) → detraccion = total - net = total × tasa
-    detraccion = Math.round(data.importeTotal * (data.porcentajeDetraccion / 100) * 100) / 100
+    // SUNAT SPOT exige soles enteros — ROUND sin decimales
+    detraccion = Math.round(data.importeTotal * (data.porcentajeDetraccion / 100))
   }
 
   // Fecha de vencimiento real (primera cuota o campo directo)
@@ -264,7 +295,7 @@ async function getCpeDetail(
     }
   }
 
-  return { detraccion, dueDate }
+  return { detraccion, dueDate, importeTotal: data.importeTotal, moneda: data.moneda }
 }
 
 // ─── Parser completo XML UBL 2.1 Perú — para generación de PDF con todos los datos ──
@@ -346,6 +377,8 @@ function parseFullInvoiceXml(xml: string): XmlInvoiceData | null {
 function parseInvoiceXmlContent(xml: string): {
   series: string; number: string; detraccion: number; dueDate: Date | null
   detraccionCode: string; cuentaBN: string
+  totalOriginal: number | null; currencyId: string | null
+  formaPago: string
 } | null {
   const idMatch = xml.match(/<cbc:ID>([A-Z][A-Z\d]{2,3}-\d+)<\/cbc:ID>/)
   if (!idMatch) return null
@@ -358,9 +391,13 @@ function parseInvoiceXmlContent(xml: string): {
   let detraccion = 0
   let dueDate: Date | null = null
   let detraccionCode = ''
+  let formaPago = ''
 
   for (const block of blocks) {
     const bid = (block.match(/<cbc:ID>([^<]+)<\/cbc:ID>/)?.[1] ?? '').trim()
+    if (bid === 'FormaPago') {
+      formaPago = (block.match(/<cbc:PaymentMeansID>([^<]+)<\/cbc:PaymentMeansID>/)?.[1] ?? '').trim()
+    }
     if (bid === 'Detraccion') {
       const amt = block.match(/<cbc:Amount[^>]*>([\d.]+)<\/cbc:Amount>/)
       if (amt) detraccion = parseFloat(amt[1])
@@ -377,7 +414,12 @@ function parseInvoiceXmlContent(xml: string): {
     xml.match(/<cac:FinancialInstitutionBranch>[\s\S]*?<cbc:ID>(\d{8,20})<\/cbc:ID>/)?.[1] ?? ''
   )
 
-  return { series, number, detraccion, dueDate, detraccionCode, cuentaBN }
+  // Monto original en la moneda del comprobante (UBL 2.1: <cbc:PayableAmount currencyID="USD">)
+  const payableMatch = xml.match(/<cbc:PayableAmount[^>]*currencyID="([A-Z]{3})"[^>]*>([\d.]+)<\/cbc:PayableAmount>/)
+  const currencyId    = payableMatch?.[1] ?? null
+  const totalOriginal = payableMatch ? parseFloat(payableMatch[2]) : null
+
+  return { series, number, detraccion, dueDate, detraccionCode, cuentaBN, totalOriginal, currencyId, formaPago }
 }
 
 // ─── Ticket polling ───────────────────────────────────────────────────────────
@@ -447,6 +489,7 @@ type RvieRecord = {
   fechaEmision: string  // DD/MM/YYYY
   baseImponible: number; igv: number; importeTotal: number
   moneda: string; estadoComprobante: string
+  tipoCambio: number  // SBS exchange rate on issue date (col 27); 1 for PEN
 }
 
 function parseCsvRvie(csv: string): RvieRecord[] {
@@ -466,6 +509,7 @@ function parseCsvRvie(csv: string): RvieRecord[] {
       igv,
       importeTotal:      parseFloat(cols[25] ?? '0') || (baseImp + igv),
       moneda:            ((cols[26] ?? '').trim() || 'PEN'),
+      tipoCambio:        parseFloat(cols[27] ?? '1') || 1,
       estadoComprobante: (cols[34] ?? '').trim(),
     }
   }).filter(r =>
@@ -529,14 +573,15 @@ export const sunatService = {
   maskConfig(cfg: Record<string, string> | null) {
     if (!cfg) return null
     return {
-      clientId:         cfg.clientId ?? '',
-      usuarioSol:       cfg.usuarioSol ?? '',
-      hasClientSecret:  !!cfg.clientSecretEnc,
-      hasClaveSol:      !!cfg.claveSolEnc,
-      nubefactUrl:      cfg.nubefactUrl ?? '',
-      hasNubefactToken: !!cfg.nubefactToken,
-      sunatPdfPath:     cfg.sunatPdfPath ?? '',
-      hasCpeToken:      !!cfg.cpeToken,
+      clientId:              cfg.clientId ?? '',
+      usuarioSol:            cfg.usuarioSol ?? '',
+      hasClientSecret:       !!cfg.clientSecretEnc,
+      hasClaveSol:           !!cfg.claveSolEnc,
+      nubefactUrl:           cfg.nubefactUrl ?? '',
+      hasNubefactToken:      !!cfg.nubefactToken,
+      sunatPdfPath:          cfg.sunatPdfPath ?? '',
+      hasCpeToken:           !!cfg.cpeToken,
+      defaultDetraccionPct:  cfg.defaultDetraccionPct ? Number(cfg.defaultDetraccionPct) : 0,
     }
   },
 
@@ -591,8 +636,11 @@ export const sunatService = {
     const buffer = Buffer.from(await fileRes.arrayBuffer())
     let csvContent: string
 
-    // Map serie-numero → { detraccion, dueDate, detraccionCode, cuentaBN } extraído de XMLs del ZIP
-    const xmlDataMap = new Map<string, { detraccion: number; dueDate: Date | null; detraccionCode: string; cuentaBN: string }>()
+    // Map serie-numero → datos extraídos de XMLs del ZIP
+    const xmlDataMap = new Map<string, {
+      detraccion: number; dueDate: Date | null; detraccionCode: string; cuentaBN: string
+      totalOriginal: number | null; currencyId: string | null; formaPago: string
+    }>()
 
     const isZip = buffer[0] === 0x50 && buffer[1] === 0x4b
     if (isZip) {
@@ -617,6 +665,8 @@ export const sunatService = {
               xmlDataMap.set(`${parsed.series}-${parsed.number}`, {
                 detraccion: parsed.detraccion, dueDate: parsed.dueDate,
                 detraccionCode: parsed.detraccionCode, cuentaBN: parsed.cuentaBN,
+                totalOriginal: parsed.totalOriginal, currencyId: parsed.currencyId,
+                formaPago: parsed.formaPago,
               })
             }
           } catch { /* continuar con la siguiente */ }
@@ -657,7 +707,32 @@ export const sunatService = {
       const existing = await prisma.invoice.findFirst({
         where: { companyId, series: rec.serie, number: rec.numero },
       })
-      if (existing) { skipped++; continue }
+      if (existing) {
+        // Si ya existe pero sin detracción, intentar completarla desde CPE o XML del ZIP
+        const existingDet = Number((existing as any).detraccion ?? 0)
+        if (existingDet === 0) {
+          let detraccion = 0; let detraccionCode = ''; let cuentaBN = ''
+          const xmlData = xmlDataMap.get(`${rec.serie}-${rec.numero}`)
+          if (xmlData?.detraccion  > 0) { detraccion = xmlData.detraccion; detraccionCode = xmlData.detraccionCode; cuentaBN = xmlData.cuentaBN }
+          if (detraccion === 0 && tokenCpe) {
+            try {
+              const cpe = await getCpeDetail(ruc, tokenCpe, rec.serie, rec.numero)
+              if (cpe.detraccion > 0) detraccion = cpe.detraccion
+            } catch { /* ignorar */ }
+          }
+          if (detraccion > 0) {
+            await prisma.invoice.update({
+              where: { id: existing.id },
+              data: {
+                detraccion: new Prisma.Decimal(detraccion),
+                ...(detraccionCode && { detraccionCode }),
+                ...(cuentaBN       && { cuentaBN }),
+              },
+            })
+          }
+        }
+        skipped++; continue
+      }
 
       // Buscar o crear cliente por RUC
       let client = await prisma.client.findFirst({ where: { companyId, ruc: rec.rucCliente } })
@@ -693,11 +768,20 @@ export const sunatService = {
 
       // Fuente 1: XMLs del ZIP (datos exactos de SUNAT sin API adicional)
       const xmlData = xmlDataMap.get(`${rec.serie}-${rec.numero}`)
+      let xmlTotalUsd: number | null = null
       if (xmlData) {
         if (xmlData.detraccion > 0)   detraccion     = xmlData.detraccion
         if (xmlData.dueDate)          dueDate        = xmlData.dueDate
         if (xmlData.detraccionCode)   detraccionCode = xmlData.detraccionCode
         if (xmlData.cuentaBN)         cuentaBN       = xmlData.cuentaBN
+        // Si el XML tiene el monto original en USD, usarlo directamente
+        if (xmlData.currencyId === 'USD' && xmlData.totalOriginal) {
+          xmlTotalUsd = xmlData.totalOriginal
+        }
+        // Contado → vencimiento igual a emisión (sin bloque de crédito en PDF)
+        if (xmlData.formaPago.toLowerCase() === 'contado') {
+          dueDate = new Date(issueDate)
+        }
       }
 
       // Fuente 2: CPE API (si no había XMLs en el ZIP)
@@ -709,12 +793,61 @@ export const sunatService = {
         } catch { /* continuar */ }
       }
 
+      // Marcar si la detraccion ya provino del XML o CPE (en ese caso ya es correcta)
+      const detracFromSource12 = detraccion > 0
+
       // Fuente 3: porcentaje configurado en el cliente
       if (detraccion === 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pct = Number((client as any).detraccionPct ?? 0)
+        const pct  = Number((client as any).detraccionPct  ?? 0)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const code = String((client as any).detraccionCode ?? '')
         if (pct > 0 && rec.importeTotal >= 700) {
-          detraccion = Math.round(rec.importeTotal * (pct / 100) * 100) / 100
+          detraccion     = Math.round(rec.importeTotal * (pct / 100))
+          if (code && !detraccionCode) detraccionCode = code
+        }
+      }
+
+      // Fuente 4: porcentaje por defecto de la empresa (sunatConfig.defaultDetraccionPct)
+      if (detraccion === 0) {
+        const defaultPct = Number(cfg?.defaultDetraccionPct ?? 0)
+        if (defaultPct > 0 && rec.importeTotal >= 700) {
+          detraccion = Math.round(rec.importeTotal * (defaultPct / 100))
+        }
+      }
+
+      // Para facturas USD: calcular total PEN usando TC SBS de la fecha de emisión.
+      // El SIRE CSV puede exportar un TC diferente al que usó la factura original,
+      // lo que causa detracciones incorrectas (ej: S/178 en vez de S/179).
+      const isUsd   = rec.moneda === 'USD'
+      let totalUsd: number | null = xmlTotalUsd  // del XML (exacto)
+      let tcambio: number | null  = null
+      let totalPen  = rec.importeTotal            // default: usar total del SIRE CSV
+
+      if (isUsd) {
+        // Obtener monto USD original si no vino del XML
+        if (!totalUsd && rec.tipoCambio > 1) {
+          totalUsd = Math.round((rec.importeTotal / rec.tipoCambio) * 100) / 100
+        }
+
+        if (totalUsd) {
+          // Consultar TC SBS de la fecha de emisión para recalcular el total PEN correcto
+          const sbsTc = await getSbsTipoCambioVenta(issueDate)
+          if (sbsTc > 0) {
+            totalPen = Math.round(totalUsd * sbsTc * 100) / 100
+            tcambio  = sbsTc
+            // Si la detraccion vino de Fuente 3 (client pct), recalcularla con totalPen correcto
+            if (!detracFromSource12 && detraccion > 0 && totalPen >= 700) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const pct = Number((client as any).detraccionPct ?? 0)
+              if (pct > 0) detraccion = Math.round(totalPen * (pct / 100))
+            }
+          } else {
+            // SBS API no disponible — fallback a TC del SIRE CSV
+            tcambio = rec.tipoCambio > 1
+              ? rec.tipoCambio
+              : (totalUsd > 0 ? Math.round((rec.importeTotal / totalUsd) * 10000) / 10000 : null)
+          }
         }
       }
 
@@ -727,13 +860,14 @@ export const sunatService = {
           description:   `Importada desde SUNAT SIRE — ${rec.razonSocial}`,
           amount:        rec.baseImponible,
           igv:           rec.igv,
-          total:         rec.importeTotal,
+          total:         totalPen,
           detraccion,
           detraccionCode,
           cuentaBN,
           issueDate,
           dueDate,
-          currency:      rec.moneda === 'USD' ? 'USD' : 'PEN',
+          currency:      isUsd ? 'USD' : 'PEN',
+          ...(totalUsd !== null && { totalUsd, tcambio }),
         },
       })
 
@@ -799,12 +933,22 @@ export const sunatService = {
             const cpe = await getCpeDetail(ruc, tokenCpe, inv.series, inv.number)
             detraccion = cpe.detraccion
             dueDate    = cpe.dueDate
+            // Si el CPE confirma que es USD y tiene el importe original, guardarlo
+            if (cpe.moneda === 'USD' && cpe.importeTotal && cpe.importeTotal > 0) {
+              const totalPen = Number(inv.total)
+              const totalUsd = cpe.importeTotal
+              const tcambio  = totalUsd > 0 ? Math.round((totalPen / totalUsd) * 10000) / 10000 : null
+              await prisma.invoice.update({
+                where: { id: inv.id },
+                data: { totalUsd, ...(tcambio !== null && { tcambio }) },
+              })
+            }
           } catch {
             // CPE falló para esta factura — continúa al fallback
           }
         }
 
-        // Ruta 2 (fallback siempre): detraccionPct del cliente
+        // Ruta 2: detraccionPct del cliente
         if (detraccion === 0) {
           const clientRow = await prisma.client.findFirst({
             where: { invoices: { some: { id: inv.id } } },
@@ -813,7 +957,18 @@ export const sunatService = {
           const pct   = Number(clientRow?.detraccionPct ?? 0)
           const total = Number(inv.total)
           if (pct > 0 && total >= 700) {
-            detraccion = Math.round(total * (pct / 100) * 100) / 100
+            // SUNAT SPOT exige soles enteros — ROUND sin decimales
+            detraccion = Math.round(total * (pct / 100))
+          }
+        }
+
+        // Ruta 3: porcentaje por defecto de la empresa (sunatConfig.defaultDetraccionPct)
+        if (detraccion === 0) {
+          const defaultPct = Number(cfg?.defaultDetraccionPct ?? 0)
+          const total      = Number(inv.total)
+          if (defaultPct > 0 && total >= 700) {
+            // SUNAT SPOT exige soles enteros — ROUND sin decimales
+            detraccion = Math.round(total * (defaultPct / 100))
           }
         }
 
@@ -836,6 +991,155 @@ export const sunatService = {
 
     onProgress('Proceso completado.')
     return { updated, noDetraccion, errors, total: invoices.length }
+  },
+
+  // ─── Enriquecer facturas USD con monto original (XML local → CPE API) ─────────
+  async enrichUsdAmounts(companyId: string, onProgress: SyncProgress) {
+    const company = await prisma.company.findUnique({ where: { id: companyId } })
+    const cfg = company?.sunatConfig as Record<string, string> | null
+    const sunatPdfPath = cfg?.sunatPdfPath ?? ''
+
+    // Token CPE (opcional)
+    let tokenCpe: string | null = null
+    if (cfg?.clientId && cfg?.clientSecretEnc && cfg?.claveSolEnc) {
+      try {
+        const clientSecret = decryptText(cfg.clientSecretEnc, cfg.clientSecretIv, cfg.clientSecretTag)
+        const claveSol     = decryptText(cfg.claveSolEnc,     cfg.claveSolIv,     cfg.claveSolTag)
+        tokenCpe = await getTokenCpe(cfg.clientId, clientSecret, company!.ruc, cfg.usuarioSol, claveSol)
+        onProgress('Token CPE obtenido. Procesando facturas USD...')
+      } catch {
+        onProgress('CPE no disponible. Usando solo XMLs locales...')
+      }
+    }
+
+    const invoices = await prisma.invoice.findMany({
+      where: { companyId, currency: 'USD', totalUsd: null },
+      select: { id: true, series: true, number: true, total: true },
+      orderBy: { issueDate: 'desc' },
+      take: 500,
+    })
+
+    onProgress(`${invoices.length} facturas USD sin monto original encontradas.`)
+
+    let updated = 0, noSource = 0, errors = 0
+
+    for (const inv of invoices) {
+      try {
+        let totalUsd: number | null = null
+
+        // ── Fuente 1: XML local ──────────────────────────────────────────────
+        if (!totalUsd && sunatPdfPath) {
+          const numPadded = inv.number.padStart(8, '0')
+          const xmlNames  = [
+            `${inv.series}-${numPadded}.xml`,
+            `${company!.ruc}-01-${inv.series}-${numPadded}.xml`,
+          ]
+          const xmlPath = findPdfInDir(sunatPdfPath, xmlNames)
+          if (xmlPath) {
+            const xml    = fs.readFileSync(xmlPath, 'utf-8')
+            const parsed = parseInvoiceXmlContent(xml)
+            if (parsed?.currencyId === 'USD' && parsed.totalOriginal) {
+              totalUsd = parsed.totalOriginal
+            }
+          }
+        }
+
+        // ── Fuente 2: CPE API (SUNAT) ────────────────────────────────────────
+        if (!totalUsd && tokenCpe) {
+          try {
+            const cpe = await getCpeDetail(company!.ruc, tokenCpe, inv.series, inv.number)
+            if (cpe.moneda === 'USD' && cpe.importeTotal && cpe.importeTotal > 0) {
+              totalUsd = cpe.importeTotal
+            }
+          } catch { /* continúa */ }
+        }
+
+        if (!totalUsd) {
+          noSource++
+          continue
+        }
+
+        const totalPen = Number(inv.total)
+        const tcambio  = totalUsd > 0 ? Math.round((totalPen / totalUsd) * 10000) / 10000 : null
+
+        await prisma.invoice.update({
+          where: { id: inv.id },
+          data: { totalUsd, ...(tcambio !== null && { tcambio }) },
+        })
+        updated++
+      } catch {
+        errors++
+      }
+    }
+
+    onProgress(`Completado. ${updated} actualizadas, ${noSource} sin fuente, ${errors} errores.`)
+    return { updated, noSource, errors, total: invoices.length }
+  },
+
+  // ─── Raw CPE response (debug) ─────────────────────────────────────────────────
+  async rawCpeResponse(companyId: string, serie: string, numero: string) {
+    const company = await prisma.company.findUnique({ where: { id: companyId } })
+    const cfg = company?.sunatConfig as Record<string, string> | null
+    if (!cfg?.clientId || !cfg?.clientSecretEnc || !cfg?.claveSolEnc) {
+      return { error: 'Sin credenciales SUNAT' }
+    }
+    const ruc          = company!.ruc
+    const clientSecret = decryptText(cfg.clientSecretEnc, cfg.clientSecretIv, cfg.clientSecretTag)
+    const claveSol     = decryptText(cfg.claveSolEnc,     cfg.claveSolIv,     cfg.claveSolTag)
+
+    const results: Record<string, unknown> = {}
+
+    // 1. Try SIRE (password grant, migeigv scope — same as syncRVIE)
+    try {
+      const tokenSire = await getToken(cfg.clientId, clientSecret, ruc, cfg.usuarioSol, claveSol)
+      const url = `${CPE_BASE}/${ruc}/comprobantes2/fcpe`
+      const params = new URLSearchParams({ numRuc: ruc, codTipoComprobante: '01', serie, numero })
+      const res = await fetch(`${url}?${params}`, {
+        headers: { Authorization: `Bearer ${tokenSire}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(12000),
+      })
+      const text = await res.text()
+      results['migeigv_fcpe'] = { status: res.status, body: text.substring(0, 2000) }
+    } catch (e) {
+      results['migeigv_fcpe'] = { error: e instanceof Error ? e.message : String(e) }
+    }
+
+    // 2. Try alternative SUNAT endpoints
+    for (const scope of [SCOPE_COMPROBANTES, SCOPE_CPE_CTRL, SCOPE_CPE_CONSULT]) {
+      const label = scope.split('/').pop()!
+      try {
+        const token = await getTokenForScope(cfg.clientId, clientSecret, ruc, cfg.usuarioSol, claveSol, scope)
+        const url = `${CPE_BASE}/${ruc}/comprobantes2/fcpe`
+        const params = new URLSearchParams({ numRuc: ruc, codTipoComprobante: '01', serie, numero })
+        const res = await fetch(`${url}?${params}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(12000),
+        })
+        const text = await res.text()
+        results[label] = { status: res.status, body: text.substring(0, 2000) }
+        if (res.ok) break
+      } catch (e) {
+        results[label] = { error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+
+    // 3. Try SIRE RVIE detail endpoint (alternative to fcpe)
+    try {
+      const tokenSire = await getToken(cfg.clientId, clientSecret, ruc, cfg.usuarioSol, claveSol)
+      // SIRE RVIE detalle de comprobante
+      const numPad = numero.padStart(8, '0')
+      const sireDetailUrl = `${SIRE_BASE}/libros/rvie/propuesta/web/propuesta/comprobante?ruc=${ruc}&serie=${serie}&numero=${numPad}&codTipoComp=01`
+      const res2 = await fetch(sireDetailUrl, {
+        headers: { Authorization: `Bearer ${tokenSire}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(12000),
+      })
+      const text2 = await res2.text()
+      results['sire_detalle'] = { status: res2.status, body: text2.substring(0, 2000) }
+    } catch (e) {
+      results['sire_detalle'] = { error: e instanceof Error ? e.message : String(e) }
+    }
+
+    return { ruc, serie, numero, results }
   },
 
   // ─── Diagnóstico OAuth CPE ────────────────────────────────────────────────────
@@ -1146,5 +1450,48 @@ export const sunatService = {
     }
 
     throw new Error('PDF no disponible en SUNAT. Descargue el PDF desde el portal SOL de SUNAT.')
+  },
+
+  // ─── Importar clientes desde CSV RVIE sin crear facturas ─────────────────
+  async importClientsOnly(companyId: string, csvContent: string) {
+    const records = parseCsvRvie(csvContent)
+
+    // Leer detraccionPct por defecto de la configuración de la empresa
+    const company = await prisma.company.findFirst({ where: { id: companyId } })
+    const cfg = company?.sunatConfig as Record<string, string> | null
+    const defaultDetraccionPct = Number(cfg?.defaultDetraccionPct ?? 0)
+
+    const uniqueByRuc = new Map<string, string>()
+    for (const r of records) {
+      if (r.rucCliente && !uniqueByRuc.has(r.rucCliente)) {
+        uniqueByRuc.set(r.rucCliente, r.razonSocial || `RUC ${r.rucCliente}`)
+      }
+    }
+
+    let created = 0, skipped = 0
+    for (const [ruc, businessName] of uniqueByRuc) {
+      const existing = await prisma.client.findFirst({ where: { companyId, ruc } })
+      if (existing) { skipped++; continue }
+      await prisma.client.create({
+        data: {
+          companyId, ruc, businessName, creditDays: 30, active: true,
+          detraccionPct: defaultDetraccionPct,
+        },
+      })
+      created++
+    }
+
+    return { totalFacturas: records.length, totalCompradores: uniqueByRuc.size, created, skipped }
+  },
+
+  // ─── Eliminar todas las facturas (sin tocar clientes) ────────────────────
+  async deleteAllInvoices(companyId: string) {
+    await prisma.workOrder.updateMany({
+      where: { companyId, invoiceId: { not: null } },
+      data:  { invoiceId: null },
+    })
+    await prisma.payment.deleteMany({ where: { invoice: { companyId } } })
+    const result = await prisma.invoice.deleteMany({ where: { companyId } })
+    return { deleted: result.count }
   },
 }

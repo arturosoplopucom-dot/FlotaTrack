@@ -355,7 +355,7 @@ export default function EquipmentAvailabilityPage() {
           </div>
           <div style={{ fontSize: 12, color: 'var(--clr-text-muted)', marginBottom: 3 }}>
             {tooltip.block.type === 'OT'
-              ? `OT: ${tooltip.block.label}`
+              ? `Liquidación: ${tooltip.block.label}`
               : `Mantenimiento: ${tooltip.block.label}`}
           </div>
           {tooltip.block.clientName && (
@@ -430,7 +430,7 @@ export default function EquipmentAvailabilityPage() {
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--clr-text)', marginTop: 4 }}>{cfg.label}</div>
                 <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 1 }}>
                   {s.status === 'DISPONIBLE' && 'Libre para asignar'}
-                  {s.status === 'EN_OBRA'    && 'Con OT activa hoy'}
+                  {s.status === 'EN_OBRA'    && 'Con Liquidación activa hoy'}
                   {s.status === 'EN_TALLER'  && 'En mantenimiento hoy'}
                   {s.status === 'RETIRADO'   && 'Fuera de operación'}
                 </div>
@@ -460,8 +460,8 @@ export default function EquipmentAvailabilityPage() {
           {/* Leyenda */}
           <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
             {[
-              { color: '#3b82f6', label: 'OT activa' },
-              { color: '#93c5fd', label: 'OT finalizada' },
+              { color: '#3b82f6', label: 'Liq. activa' },
+              { color: '#93c5fd', label: 'Liq. finalizada' },
               { color: '#f59e0b', label: 'En taller' },
               { color: '#fcd34d', label: 'Mant. completado' },
             ].map((l) => (
@@ -650,7 +650,7 @@ export default function EquipmentAvailabilityPage() {
         </div>
 
         <div style={{ fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 10, display: 'flex', justifyContent: 'space-between' }}>
-          <span>Los bloques con color claro corresponden a OT/mantenimientos ya finalizados.</span>
+          <span>Los bloques con color claro corresponden a Liquidaciones/mantenimientos ya finalizados.</span>
           <span>Actualizado: {format(new Date(), "dd/MM/yyyy HH:mm")}</span>
         </div>
       </div>

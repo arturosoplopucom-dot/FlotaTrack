@@ -29,6 +29,7 @@ model Company {
   maintenanceSessions MaintenanceSession[]
   operators           Operator[]
   quotes              Quote[]
+  serviceReports      ServiceReport[]
   users               User[]
   workOrders          WorkOrder[]
 
@@ -52,24 +53,26 @@ model User {
 }
 
 model Client {
-  id            String      @id @default(cuid())
-  companyId     String
-  businessName  String
-  ruc           String
-  contactName   String?
-  phone         String?
-  whatsapp      String?
-  email         String?
-  address       String?
-  creditDays    Int         @default(30)
-  active        Boolean     @default(true)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  detraccionPct Decimal     @default(0) @db.Decimal(5, 2)
-  company       Company     @relation(fields: [companyId], references: [id])
-  invoices      Invoice[]
-  quotes        Quote[]
-  workOrders    WorkOrder[]
+  id             String          @id @default(cuid())
+  companyId      String
+  businessName   String
+  ruc            String
+  contactName    String?
+  phone          String?
+  whatsapp       String?
+  email          String?
+  address        String?
+  creditDays     Int             @default(30)
+  active         Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  detraccionPct  Decimal         @default(0) @db.Decimal(5, 2)
+  detraccionCode String          @default("") @db.VarChar(3)
+  company        Company         @relation(fields: [companyId], references: [id])
+  invoices       Invoice[]
+  quotes         Quote[]
+  serviceReports ServiceReport[]
+  workOrders     WorkOrder[]
 
   @@unique([companyId, ruc])
   @@map("clients")
@@ -98,6 +101,8 @@ model Invoice {
   detraccion     Decimal        @default(0) @db.Decimal(12, 2)
   cuentaBN       String?        @default("")
   detraccionCode String?        @default("")
+  totalUsd       Decimal?       @map("totalusd") @db.Decimal(12, 2)
+  tcambio        Decimal?       @map("tcambio") @db.Decimal(10, 4)
   cuotas         InvoiceCuota[]
   client         Client         @relation(fields: [clientId], references: [id])
   company        Company        @relation(fields: [companyId], references: [id])
@@ -131,12 +136,18 @@ model Equipment {
   maintenanceIntervalKm Decimal?             @db.Decimal(12, 1)
   nextMaintenanceKm     Decimal?             @db.Decimal(12, 1)
   odometerKm            Decimal?             @db.Decimal(12, 1)
+  hourlyRatePen         Decimal?             @db.Decimal(12, 2)
+  hourlyRateUsd         Decimal?             @db.Decimal(12, 2)
+  dailyRatePen          Decimal?             @db.Decimal(12, 2)
+  dailyRateUsd          Decimal?             @db.Decimal(12, 2)
   company               Company              @relation(fields: [companyId], references: [id])
   maintenancePlans      MaintenancePlan[]
   maintenanceRecords    MaintenanceRecord[]
   maintenanceSessions   MaintenanceSession[]
   odometerLogs          OdometerLog[]
   quotes                Quote[]
+  quoteItems            QuoteItem[]
+  serviceReports        ServiceReport[]
   workOrders            WorkOrder[]
 
   @@index([companyId, status])
@@ -167,40 +178,43 @@ model Operator {
   status        OperatorStatus @default(ACTIVE)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
-  company       Company        @relation(fields: [companyId], references: [id])
-  workOrders    WorkOrder[]
+  company        Company         @relation(fields: [companyId], references: [id])
+  serviceReports ServiceReport[]
+  workOrders     WorkOrder[]
 
   @@unique([companyId, dni])
   @@map("operators")
 }
 
 model WorkOrder {
-  id          String          @id @default(cuid())
-  companyId   String
-  number      String
-  clientId    String
-  equipmentId String
-  operatorId  String
-  location    String?
-  description String?
-  startDate   DateTime
-  endDate     DateTime?
-  billingType BillingType     @default(HOURLY)
-  quantity    Decimal         @default(0) @db.Decimal(10, 2)
-  unitRate    Decimal         @default(0) @db.Decimal(12, 2)
-  subtotal    Decimal         @default(0) @db.Decimal(12, 2)
-  status      WorkOrderStatus @default(DRAFT)
-  invoiceId   String?
-  notes       String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  quote       Quote?
-  costs       WorkOrderCost[]
-  client      Client          @relation(fields: [clientId], references: [id])
-  company     Company         @relation(fields: [companyId], references: [id])
-  equipment   Equipment       @relation(fields: [equipmentId], references: [id])
-  invoice     Invoice?        @relation(fields: [invoiceId], references: [id])
-  operator    Operator        @relation(fields: [operatorId], references: [id])
+  id             String          @id @default(cuid())
+  companyId      String
+  number         String
+  clientId       String
+  equipmentId    String?
+  operatorId     String?
+  location       String?
+  description    String?
+  startDate      DateTime
+  endDate        DateTime?
+  billingType    BillingType     @default(HOURLY)
+  currency       Currency        @default(PEN)
+  quantity       Decimal         @default(0) @db.Decimal(10, 2)
+  unitRate       Decimal         @default(0) @db.Decimal(12, 2)
+  subtotal       Decimal         @default(0) @db.Decimal(12, 2)
+  status         WorkOrderStatus @default(DRAFT)
+  invoiceId      String?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  quote          Quote?
+  costs          WorkOrderCost[]
+  serviceReports ServiceReport[]
+  client         Client          @relation(fields: [clientId], references: [id])
+  company        Company         @relation(fields: [companyId], references: [id])
+  equipment      Equipment?      @relation(fields: [equipmentId], references: [id])
+  invoice        Invoice?        @relation(fields: [invoiceId], references: [id])
+  operator       Operator?       @relation(fields: [operatorId], references: [id])
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -228,16 +242,16 @@ model MaintenancePlan {
   intervalType     MaintenanceInterval  @default(DATE)
   intervalDays     Int?
   intervalHours    Decimal?             @db.Decimal(10, 1)
-  intervalKm       Decimal?             @db.Decimal(12, 1)
   lastServiceAt    DateTime?
   lastServiceHours Decimal?             @db.Decimal(10, 1)
-  lastServiceKm    Decimal?             @db.Decimal(12, 1)
   nextDueAt        DateTime?
   nextDueHours     Decimal?             @db.Decimal(10, 1)
-  nextDueKm        Decimal?             @db.Decimal(12, 1)
   active           Boolean              @default(true)
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
+  intervalKm       Decimal?             @db.Decimal(12, 1)
+  lastServiceKm    Decimal?             @db.Decimal(12, 1)
+  nextDueKm        Decimal?             @db.Decimal(12, 1)
   company          Company              @relation(fields: [companyId], references: [id])
   equipment        Equipment            @relation(fields: [equipmentId], references: [id])
   records          MaintenanceRecord[]
@@ -284,14 +298,14 @@ model MaintenanceSession {
   hoursAtClose      Decimal?                 @db.Decimal(10, 1)
   actualCost        Decimal?                 @db.Decimal(12, 2)
   completionNotes   String?
-  odometerKmAtClose Decimal?                 @db.Decimal(12, 1)
-  nextMaintenanceKm Decimal?                 @db.Decimal(12, 1)
   createdAt         DateTime                 @default(now())
   updatedAt         DateTime                 @updatedAt
-  record          MaintenanceRecord[]
-  company         Company                  @relation(fields: [companyId], references: [id])
-  equipment       Equipment                @relation(fields: [equipmentId], references: [id])
-  plan            MaintenancePlan?         @relation(fields: [planId], references: [id])
+  nextMaintenanceKm Decimal?                 @db.Decimal(12, 1)
+  odometerKmAtClose Decimal?                 @db.Decimal(12, 1)
+  record            MaintenanceRecord[]
+  company           Company                  @relation(fields: [companyId], references: [id])
+  equipment         Equipment                @relation(fields: [equipmentId], references: [id])
+  plan              MaintenancePlan?         @relation(fields: [planId], references: [id])
 
   @@index([companyId, status])
   @@index([companyId, equipmentId, status])
@@ -299,28 +313,29 @@ model MaintenanceSession {
 }
 
 model Quote {
-  id                     String      @id @default(cuid())
+  id                     String          @id @default(cuid())
   companyId              String
   number                 String
   clientId               String
   equipmentId            String?
-  status                 QuoteStatus @default(DRAFT)
-  issueDate              DateTime    @default(now())
+  status                 QuoteStatus     @default(DRAFT)
+  issueDate              DateTime        @default(now())
   validUntil             DateTime
-  subtotal               Decimal     @default(0) @db.Decimal(12, 2)
-  igv                    Decimal     @default(0) @db.Decimal(12, 2)
-  total                  Decimal     @default(0) @db.Decimal(12, 2)
-  currency               Currency    @default(PEN)
+  subtotal               Decimal         @default(0) @db.Decimal(12, 2)
+  igv                    Decimal         @default(0) @db.Decimal(12, 2)
+  total                  Decimal         @default(0) @db.Decimal(12, 2)
+  currency               Currency        @default(PEN)
   notes                  String?
-  convertedToWorkOrderId String?     @unique
-  createdAt              DateTime    @default(now())
-  updatedAt              DateTime    @updatedAt
+  convertedToWorkOrderId String?         @unique
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
   rejectionNotes         String?
   items                  QuoteItem[]
-  client                 Client      @relation(fields: [clientId], references: [id])
-  company                Company     @relation(fields: [companyId], references: [id])
-  workOrder              WorkOrder?  @relation(fields: [convertedToWorkOrderId], references: [id])
-  equipment              Equipment?  @relation(fields: [equipmentId], references: [id])
+  serviceReports         ServiceReport[]
+  client                 Client          @relation(fields: [clientId], references: [id])
+  company                Company         @relation(fields: [companyId], references: [id])
+  workOrder              WorkOrder?      @relation(fields: [convertedToWorkOrderId], references: [id])
+  equipment              Equipment?      @relation(fields: [equipmentId], references: [id])
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -328,14 +343,16 @@ model Quote {
 }
 
 model QuoteItem {
-  id          String  @id @default(cuid())
+  id          String     @id @default(cuid())
   quoteId     String
+  equipmentId String?
   description String
-  quantity    Decimal @default(1) @db.Decimal(10, 3)
-  unitPrice   Decimal @default(0) @db.Decimal(12, 2)
-  total       Decimal @default(0) @db.Decimal(12, 2)
-  order       Int     @default(0)
-  quote       Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  quantity    Decimal    @default(1) @db.Decimal(10, 3)
+  unitPrice   Decimal    @default(0) @db.Decimal(12, 2)
+  total       Decimal    @default(0) @db.Decimal(12, 2)
+  order       Int        @default(0)
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id])
+  quote       Quote      @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@map("quote_items")
 }
@@ -372,6 +389,7 @@ model Payment {
   notes     String?
   createdAt DateTime      @default(now())
   cuotaId   String?       @unique
+  currency  String        @default("PEN") @db.VarChar(3)
   cuota     InvoiceCuota? @relation(fields: [cuotaId], references: [id])
   invoice   Invoice       @relation(fields: [invoiceId], references: [id])
 
@@ -479,4 +497,51 @@ enum PaymentMethod {
   TRANSFER
   CHECK
   DEPOSIT
+}
+
+enum ServiceReportStatus {
+  PENDING
+  LIQUIDATED
+}
+
+model ServiceReport {
+  id              String              @id @default(cuid())
+  companyId       String
+  number          String              // N° Reporte (e.g. 3221)
+  clientId        String
+  equipmentId     String?
+  operatorId      String?
+  quoteId         String?
+  workOrderId     String?             // Set when included in a Liquidación
+
+  reportDate      DateTime            @db.Date
+  startTime       String              @db.VarChar(5)  // "HH:mm"
+  endTime         String              @db.VarChar(5)  // "HH:mm"
+  totalHours      Decimal             @db.Decimal(5, 2)
+  travelKm        Decimal?            @db.Decimal(8, 2)
+
+  workDescription String?
+  location        String?
+
+  unitRate        Decimal             @default(0) @db.Decimal(12, 2)
+  amount          Decimal             @default(0) @db.Decimal(12, 2)
+  currency        Currency            @default(PEN)
+
+  status          ServiceReportStatus @default(PENDING)
+
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  company         Company             @relation(fields: [companyId], references: [id])
+  client          Client              @relation(fields: [clientId], references: [id])
+  equipment       Equipment?          @relation(fields: [equipmentId], references: [id])
+  operator        Operator?           @relation(fields: [operatorId], references: [id])
+  quote           Quote?              @relation(fields: [quoteId], references: [id])
+  workOrder       WorkOrder?          @relation(fields: [workOrderId], references: [id])
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, clientId])
+  @@index([companyId, workOrderId])
+  @@map("service_reports")
 }

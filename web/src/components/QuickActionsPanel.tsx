@@ -252,7 +252,7 @@ const QuickActionsPanel: React.FC<{ layout?: 'dock' | 'sidebar' }> = ({ layout =
             onMouseLeave={hoverLeave}
           >
             <span style={{ fontSize: 14, flexShrink: 0 }}>🚜</span>
-            <span>Nueva OT / Despacho</span>
+            <span>Nueva Liquidación</span>
           </button>
 
           {/* Alertas de Mora */}

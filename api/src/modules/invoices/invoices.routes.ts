@@ -21,7 +21,7 @@ router.get('/dashboard', async (req: AuthRequest, res: Response) => {
 
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
-    const { status, clientId, dueBefore, dueAfter, search, page, limit } = req.query
+    const { status, clientId, dueBefore, dueAfter, search, page, limit, noDetraccion } = req.query
     const data = await invoicesService.findAll(req.user!.companyId, {
       status: status as any,
       clientId: clientId as string,
@@ -30,6 +30,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       search: search as string | undefined,
       page: page ? parseInt(page as string) : undefined,
       limit: limit ? parseInt(limit as string) : undefined,
+      noDetraccion: noDetraccion === 'true',
     })
     res.json(data)
   } catch (err: unknown) {

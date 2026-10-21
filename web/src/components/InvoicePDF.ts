@@ -96,10 +96,17 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
   const tipoLetra = inv.series.charAt(0).toUpperCase()
   const tipoLabel = TIPO_DOC[tipoLetra] ?? 'COMPROBANTE DE PAGO'
   const serieNum  = `${inv.series}-${inv.number.padStart(8, '0')}`
-  const baseAmt   = Number(inv.amount) > 0 ? Number(inv.amount) : Number(inv.total) / 1.18
-  const igvAmt    = Number(inv.igv)    > 0 ? Number(inv.igv)    : Number(inv.total) - baseAmt
-  const totalAmt  = Number(inv.total)
-  const detraccion = Number(inv.detraccion ?? 0)
+
+  // Cuando la factura es USD y tenemos el monto original, usamos totalUsd para el PDF
+  const isUsd   = cur === 'USD' && !!inv.totalUsd && Number(inv.totalUsd) > 0
+  const totalPen = Number(inv.total)
+  const totalAmt  = isUsd ? Number(inv.totalUsd!) : totalPen
+  const ratio     = isUsd && totalPen > 0 ? totalAmt / totalPen : 1
+  const currSym   = isUsd ? 'USD' : 'S/'
+
+  const baseAmt   = Number(inv.amount) > 0 ? Number(inv.amount) * ratio : totalAmt / 1.18
+  const igvAmt    = Number(inv.igv)    > 0 ? Number(inv.igv) * ratio    : totalAmt - baseAmt
+  const detraccion = Number(inv.detraccion ?? 0) * ratio
 
   // ══════════════════════════════════════════════════════════════════
   // BLOQUE 1 — CABECERA: Emisor (izq) + Cuadro doc (der)
@@ -179,8 +186,9 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
   }
 
 
-  const formasPago: Record<string, string> = { PENDING: 'Crédito', PARTIAL: 'Crédito', OVERDUE: 'Crédito', PAID: 'Contado' }
-  drawRow2('Fecha de Emisión :', fmtDate(inv.issueDate), 'Forma de pago :', formasPago[inv.status] ?? 'Crédito')
+  const isContado = !inv.dueDate ||
+    new Date(inv.dueDate).toDateString() === new Date(inv.issueDate).toDateString()
+  drawRow2('Fecha de Emisión :', fmtDate(inv.issueDate), 'Forma de pago :', isContado ? 'Contado' : 'Crédito')
   drawRow1('Señor(es) :', inv.client.businessName)
   drawRow1('RUC :', inv.client.ruc)
   if (inv.client.email) drawRow1('E-mail :', inv.client.email)
@@ -252,7 +260,7 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
   doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); setC(GRAY)
   doc.text('Valor de Venta de Operaciones Gratuitas :', L + 2, y + 5)
   doc.setFont('helvetica', 'bold'); setC(DARK)
-  doc.text(`S/ 0.00`, L + CW / 2 - 2, y + 5, { align: 'right' })
+  doc.text(`${currSym} 0.00`, L + CW / 2 - 2, y + 5, { align: 'right' })
   y += 10
 
   // ══════════════════════════════════════════════════════════════════
@@ -275,16 +283,16 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
   const TROW_H = 6
   type TotalRow = [string, string, boolean?]
   const totalRows: TotalRow[] = [
-    ['Sub Total Ventas :',         `S/ ${fmt(baseAmt)}`],
-    ['Anticipos :',                `S/ 0.00`],
-    ['Descuentos :',               `S/ 0.00`],
-    ['Valor Venta :',              `S/ ${fmt(baseAmt)}`],
-    ['ISC :',                      `S/ 0.00`],
-    [`IGV (${igvPct}.00%) :`,      `S/ ${fmt(igvAmt)}`],
-    ['Otros Cargos :',             `S/ 0.00`],
-    ['Otros Tributos :',           `S/ 0.00`],
-    ['Monto de redondeo :',        `S/ 0.00`],
-    ['Importe Total :',            `S/ ${fmt(totalAmt)}`, true],
+    ['Sub Total Ventas :',         `${currSym} ${fmt(baseAmt)}`],
+    ['Anticipos :',                `${currSym} 0.00`],
+    ['Descuentos :',               `${currSym} 0.00`],
+    ['Valor Venta :',              `${currSym} ${fmt(baseAmt)}`],
+    ['ISC :',                      `${currSym} 0.00`],
+    [`IGV (${igvPct}.00%) :`,      `${currSym} ${fmt(igvAmt)}`],
+    ['Otros Cargos :',             `${currSym} 0.00`],
+    ['Otros Tributos :',           `${currSym} 0.00`],
+    ['Monto de redondeo :',        `${currSym} 0.00`],
+    ['Importe Total :',            `${currSym} ${fmt(totalAmt)}`, true],
   ]
 
   totalRows.forEach(([label, value, bold]) => {
@@ -353,13 +361,13 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
     doc.setFont('helvetica', 'normal'); setC(GRAY)
     doc.text('Monto detracción:', L + 148, y + 36)
     doc.setFont('helvetica', 'bold'); setC(DARK)
-    doc.text(`S/ ${fmt(detraccion)}`, R, y + 36, { align: 'right' })
+    doc.text(`S/ ${fmt(Number(inv.detraccion ?? 0))}`, R, y + 36, { align: 'right' })
 
     y += 44
   }
 
-  // ── BLOQUE 5B: Información del crédito (siempre que no sea Contado) ──────────
-  if (inv.status !== 'PAID') {
+  // ── BLOQUE 5B: Información del crédito (solo para facturas a crédito) ──────────
+  if (!isContado) {
     // Caja de crédito
     bdr(L, y, CW, 8)
     // Título inline
@@ -375,7 +383,7 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
     doc.text('Monto neto pendiente de pago', L + 2, y + 5)
     doc.setFont('helvetica', 'bold'); setC(DARK)
     doc.text(':', L + 60, y + 5)
-    doc.text(`S/ ${fmt(neto)}`, L + 64, y + 5)
+    doc.text(`${currSym} ${fmt(neto)}`, L + 64, y + 5)
     y += 7
 
     // Total de cuotas
@@ -421,7 +429,7 @@ async function buildInvoicePDF(inv: Invoice, company: CompanyProfile): Promise<j
         doc.setFont('helvetica', 'normal'); doc.setFontSize(7); setC(DARK)
         doc.text('01', gx + 2, y + 5.5)
         doc.text(fmtDate(inv.dueDate), gx + NUM_W + 2, y + 5.5)
-        doc.text(`S/ ${fmt(neto)}`, gx + colW - 2, y + 5.5, { align: 'right' })
+        doc.text(`${currSym} ${fmt(neto)}`, gx + colW - 2, y + 5.5, { align: 'right' })
       }
     })
     y += 10

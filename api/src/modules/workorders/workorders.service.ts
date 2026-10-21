@@ -3,34 +3,60 @@ import { prisma } from '../../config/database'
 
 export const workOrdersService = {
   async findAll(companyId: string, status?: WorkOrderStatus) {
-    return prisma.workOrder.findMany({
-      where: { companyId, ...(status ? { status } : {}) },
-      include: {
-        client: { select: { businessName: true, ruc: true, phone: true, whatsapp: true, email: true } },
-        equipment: { select: { name: true, type: true } },
-        operator: { select: { name: true } },
-        costs: true,
-        invoice: { select: { id: true, series: true, number: true, total: true, detraccion: true, status: true } },
-        quote: { select: { id: true, number: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    })
+    const [wos, curs] = await Promise.all([
+      prisma.workOrder.findMany({
+        where: { companyId, ...(status ? { status } : {}) },
+        include: {
+          client: { select: { businessName: true, ruc: true, phone: true, whatsapp: true, email: true, contactName: true } },
+          equipment: { select: { name: true, type: true } },
+          operator: { select: { name: true } },
+          costs: true,
+          invoice: { select: { id: true, series: true, number: true, total: true, detraccion: true, status: true } },
+          quote: { select: { id: true, number: true } },
+          serviceReports: {
+            select: {
+              id: true, number: true, reportDate: true,
+              startTime: true, endTime: true, travelKm: true, totalHours: true,
+              unitRate: true, amount: true, currency: true, workDescription: true,
+              equipment: { select: { name: true } },
+              operator: { select: { name: true } },
+            },
+            orderBy: { number: 'asc' },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.$queryRaw<{ id: string; currency: string }[]>`SELECT id, currency FROM work_orders WHERE "companyId" = ${companyId}`,
+    ])
+    const curMap = new Map(curs.map((c) => [c.id, c.currency]))
+    return wos.map((wo) => ({ ...wo, currency: curMap.get(wo.id) ?? 'PEN' }))
   },
 
   async findOne(companyId: string, id: string) {
     const wo = await prisma.workOrder.findFirst({
       where: { companyId, id },
       include: {
-        client: { select: { businessName: true, ruc: true, phone: true, whatsapp: true, email: true } },
-        equipment: { select: { name: true, type: true, hourlyRate: true, dailyRate: true } },
+        client: { select: { businessName: true, ruc: true, phone: true, whatsapp: true, email: true, contactName: true } },
+        equipment: { select: { name: true, type: true, hourlyRate: true, dailyRate: true, hourlyRatePen: true, hourlyRateUsd: true, dailyRatePen: true, dailyRateUsd: true } },
         operator: { select: { name: true } },
         costs: true,
         invoice: { select: { id: true, series: true, number: true, total: true, detraccion: true, dueDate: true, status: true } },
         quote: { select: { id: true, number: true } },
+        serviceReports: {
+          select: {
+            id: true, number: true, reportDate: true,
+            startTime: true, endTime: true, travelKm: true, totalHours: true,
+            unitRate: true, amount: true, currency: true, workDescription: true,
+            equipment: { select: { name: true } },
+            operator: { select: { name: true } },
+          },
+          orderBy: { number: 'asc' },
+        },
       },
     })
     if (!wo) throw new Error('Orden de trabajo no encontrada')
-    return wo
+    const [cur] = await prisma.$queryRaw<{ currency: string }[]>`SELECT currency FROM work_orders WHERE id = ${id}`
+    return { ...wo, currency: cur?.currency ?? 'PEN' }
   },
 
   async nextNumber(companyId: string): Promise<string> {
@@ -48,14 +74,14 @@ export const workOrdersService = {
     clientId: string; equipmentId: string; operatorId: string
     location?: string; description?: string
     startDate: string; endDate?: string
-    billingType?: BillingType; quantity?: number; unitRate?: number
+    billingType?: BillingType; currency?: string; quantity?: number; unitRate?: number
     notes?: string
   }) {
     const qty = data.quantity ?? 0
     const rate = data.unitRate ?? 0
     const subtotal = qty * rate
 
-    return prisma.workOrder.create({
+    const wo = await prisma.workOrder.create({
       data: {
         companyId,
         number: await this.nextNumber(companyId),
@@ -79,12 +105,15 @@ export const workOrdersService = {
         costs: true,
       },
     })
+    const currency = data.currency ?? 'PEN'
+    await prisma.$executeRaw`UPDATE work_orders SET currency = ${currency} WHERE id = ${wo.id}`
+    return { ...wo, currency }
   },
 
   async update(companyId: string, id: string, data: Partial<{
     location: string; description: string
     startDate: string; endDate: string
-    billingType: BillingType; quantity: number; unitRate: number
+    billingType: BillingType; currency: string; quantity: number; unitRate: number
     status: WorkOrderStatus; notes: string
   }>) {
     await this.findOne(companyId, id)
@@ -92,15 +121,21 @@ export const workOrdersService = {
     const rate = data.unitRate
     const subtotal = qty !== undefined && rate !== undefined ? qty * rate : undefined
 
-    return prisma.workOrder.update({
+    const { currency, ...rest } = data as any
+    const updated = await prisma.workOrder.update({
       where: { id },
       data: {
-        ...data,
-        startDate: data.startDate ? new Date(data.startDate) : undefined,
-        endDate: data.endDate ? new Date(data.endDate) : undefined,
+        ...rest,
+        startDate: rest.startDate ? new Date(rest.startDate) : undefined,
+        endDate: rest.endDate ? new Date(rest.endDate) : undefined,
         ...(subtotal !== undefined ? { subtotal } : {}),
       },
     })
+    if (currency) {
+      await prisma.$executeRaw`UPDATE work_orders SET currency = ${currency} WHERE id = ${id}`
+    }
+    const cur = currency ?? (await prisma.$queryRaw<{ currency: string }[]>`SELECT currency FROM work_orders WHERE id = ${id}`)[0]?.currency ?? 'PEN'
+    return { ...updated, currency: cur }
   },
 
   async updateStatus(companyId: string, id: string, status: WorkOrderStatus) {
@@ -136,8 +171,8 @@ export const workOrdersService = {
         workOrders: { none: {} },          // no vinculadas a ninguna OT
       },
       select: {
-        id: true, series: true, number: true, total: true,
-        detraccion: true, issueDate: true, dueDate: true, status: true,
+        id: true, series: true, number: true, total: true, totalUsd: true,
+        detraccion: true, issueDate: true, dueDate: true, status: true, currency: true,
       },
       orderBy: { issueDate: 'desc' },
       take: 50,

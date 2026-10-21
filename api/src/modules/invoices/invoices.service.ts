@@ -82,6 +82,7 @@ export type InvoiceFilters = {
   search?: string
   page?: number
   limit?: number
+  noDetraccion?: boolean
 }
 
 export const invoicesService = {
@@ -91,40 +92,63 @@ export const invoicesService = {
     const in7Days = new Date(today)
     in7Days.setDate(in7Days.getDate() + 7)
 
-    // Usar findMany para calcular saldo real (total - detraccion - pagos parciales)
-    const [unpaidInvoices, paidAgg] = await Promise.all([
+    const [unpaidInvoices, paidAgg, paidUsdAgg] = await Promise.all([
       prisma.invoice.findMany({
         where: { companyId, status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] } },
-        select: { total: true, detraccion: true, dueDate: true, payments: { select: { amount: true } } },
+        select: { total: true, detraccion: true, dueDate: true, currency: true, totalUsd: true, tcambio: true, payments: { select: { amount: true, currency: true } } },
       }),
       prisma.invoice.aggregate({
-        where: { companyId, status: 'PAID' },
+        where: { companyId, status: 'PAID', currency: 'PEN' },
         _sum: { total: true },
+        _count: true,
+      }),
+      prisma.invoice.aggregate({
+        where: { companyId, status: 'PAID', currency: 'USD' },
+        _sum: { totalUsd: true },
         _count: true,
       }),
     ])
 
-    const balance = (inv: { total: unknown; detraccion: unknown; payments: { amount: unknown }[] }) => {
-      const paid = inv.payments.reduce((s, p) => s + Number(p.amount), 0)
-      const det  = Number((inv as any).detraccion ?? 0)
+    // Balance PEN para facturas PEN
+    const balancePen = (inv: any) => {
+      const paid = inv.payments.filter((p: any) => (p.currency ?? 'PEN') === 'PEN').reduce((s: number, p: any) => s + Number(p.amount), 0)
+      const det  = Number(inv.detraccion ?? 0)
       return Math.max(0, Number(inv.total) - det - paid)
     }
+    // Balance USD para facturas USD (normaliza pagos PEN con tcambio)
+    const balanceUsd = (inv: any) => {
+      const tc      = Number(inv.tcambio ?? 0)
+      const paidUsd = inv.payments.reduce((s: number, p: any) => {
+        return s + ((p.currency ?? 'USD') === 'PEN' && tc > 0 ? Number(p.amount) / tc : Number(p.amount))
+      }, 0)
+      return Math.max(0, Number(inv.totalUsd ?? 0) - paidUsd)
+    }
 
-    const overdueInvs  = unpaidInvoices.filter((i) => i.dueDate < today)
-    const dueSoonInvs  = unpaidInvoices.filter((i) => i.dueDate >= today && i.dueDate <= in7Days)
-    const currentInvs  = unpaidInvoices.filter((i) => i.dueDate > in7Days)
+    const sumByCur = (list: any[]) => ({
+      amount:    list.filter(i => i.currency !== 'USD').reduce((s, i) => s + balancePen(i), 0),
+      amountUsd: list.filter(i => i.currency === 'USD').reduce((s, i) => s + balanceUsd(i), 0),
+    })
+
+    const overdueInvs = unpaidInvoices.filter((i) => i.dueDate < today)
+    const dueSoonInvs = unpaidInvoices.filter((i) => i.dueDate >= today && i.dueDate <= in7Days)
+    const currentInvs = unpaidInvoices.filter((i) => i.dueDate > in7Days)
 
     return {
-      overdue: { amount: overdueInvs.reduce((s, i) => s + balance(i), 0), count: overdueInvs.length },
-      dueSoon: { amount: dueSoonInvs.reduce((s, i) => s + balance(i), 0), count: dueSoonInvs.length },
-      current: { amount: currentInvs.reduce((s, i) => s + balance(i), 0), count: currentInvs.length },
-      paid: { amount: Number(paidAgg._sum.total || 0), count: paidAgg._count },
-      totalPending: unpaidInvoices.reduce((s, i) => s + balance(i), 0),
+      overdue: { ...sumByCur(overdueInvs), count: overdueInvs.length },
+      dueSoon: { ...sumByCur(dueSoonInvs), count: dueSoonInvs.length },
+      current: { ...sumByCur(currentInvs), count: currentInvs.length },
+      paid: {
+        amount:    Number(paidAgg._sum.total    || 0),
+        amountUsd: Number(paidUsdAgg._sum.totalUsd || 0),
+        count:     paidAgg._count + paidUsdAgg._count,
+      },
+      totalPending:    unpaidInvoices.filter(i => i.currency !== 'USD').reduce((s, i) => s + balancePen(i), 0),
+      totalPendingUsd: unpaidInvoices.filter(i => i.currency === 'USD').reduce((s, i) => s + balanceUsd(i), 0),
     }
   },
 
   async findAll(companyId: string, filters: InvoiceFilters = {}) {
-    const { status, clientId, dueBefore, dueAfter, search, page = 1, limit = 50 } = filters
+    const { status, clientId, dueBefore, dueAfter, search, page = 1, limit = 50, noDetraccion } = filters
     const skip = (page - 1) * limit
 
     const today2 = new Date(); today2.setHours(0, 0, 0, 0)
@@ -141,15 +165,19 @@ export const invoicesService = {
       if (dueBefore) where.dueDate.lte = dueBefore
       if (dueAfter) where.dueDate.gte = dueAfter
     }
+    if (noDetraccion) {
+      where.detraccion = { lte: 0 }
+    }
     if (search) {
       const q = search.trim()
       // Detectar si buscan por número de factura (ej: F001-00245 o solo 00245)
       const invoiceNumMatch = q.match(/^([A-Z]\d{3})-?(\d+)$/i)
+      const numPart = invoiceNumMatch ? (invoiceNumMatch[2].replace(/^0+/, '') || '0') : null
       where.OR = invoiceNumMatch
         ? [
             { series: { equals: invoiceNumMatch[1].toUpperCase(), mode: 'insensitive' },
-              number: { contains: invoiceNumMatch[2], mode: 'insensitive' } },
-            { number: { contains: q, mode: 'insensitive' } },
+              number: { contains: numPart!, mode: 'insensitive' } },
+            { number: { contains: numPart!, mode: 'insensitive' } },
           ]
         : [
             { client: { businessName: { contains: q, mode: 'insensitive' } } },
@@ -275,11 +303,12 @@ export const invoicesService = {
 
   async registerPayment(companyId: string, invoiceId: string, data: {
     amount: number
+    currency?: 'PEN' | 'USD'
     method?: 'CASH' | 'TRANSFER' | 'CHECK' | 'DEPOSIT'
     reference?: string
     paidAt?: string
     notes?: string
-    cuotaId?: string   // si se paga una cuota específica
+    cuotaId?: string
   }) {
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, companyId },
@@ -291,31 +320,32 @@ export const invoicesService = {
     if (!invoice) throw new Error('Factura no encontrada')
     if (invoice.status === 'PAID') throw new Error('La factura ya está pagada')
 
-    // Validar cuota si se especificó
     if (data.cuotaId) {
       const cuota = invoice.cuotas.find(c => c.id === data.cuotaId)
       if (!cuota) throw new Error('Cuota no encontrada en esta factura')
       if (cuota.status === 'PAID') throw new Error('Esta cuota ya está pagada')
-      // pago existente vinculado a esta cuota?
       const existing = await prisma.payment.findUnique({ where: { cuotaId: data.cuotaId } })
       if (existing) throw new Error('Ya existe un pago registrado para esta cuota')
     }
 
-    const paidAt = data.paidAt ? new Date(data.paidAt) : new Date()
+    const paidAt      = data.paidAt ? new Date(data.paidAt) : new Date()
+    const isUsdInv    = (invoice as any).currency === 'USD'
+    const payCurrency = data.currency ?? (isUsdInv ? 'USD' : 'PEN')
 
     const payment = await prisma.payment.create({
       data: {
         invoiceId,
-        cuotaId: data.cuotaId ?? null,
-        amount: new Prisma.Decimal(data.amount),
-        method: data.method ?? 'TRANSFER',
+        cuotaId:   data.cuotaId ?? null,
+        amount:    new Prisma.Decimal(data.amount),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        currency:  payCurrency as any,
+        method:    data.method ?? 'TRANSFER',
         reference: data.reference,
         paidAt,
-        notes: data.notes,
+        notes:     data.notes,
       },
     })
 
-    // Actualizar estado de la cuota pagada
     if (data.cuotaId) {
       await prisma.invoiceCuota.update({
         where: { id: data.cuotaId },
@@ -323,26 +353,33 @@ export const invoicesService = {
       })
     }
 
-    // Recalcular estado de la factura
-    const allPayments = await prisma.payment.aggregate({
-      where: { invoiceId },
-      _sum: { amount: true },
-    })
-    const totalPaid      = Number(allPayments._sum.amount ?? 0)
-    const totalInvoice   = Number(invoice.total)
-    const detraccion     = Number((invoice as any).detraccion ?? 0)
-    const netCollectible = Math.round((totalInvoice - detraccion) * 100) / 100
+    // Calcular balance según moneda de la factura
+    // Para USD: normalizar todos los pagos a USD usando el TC de la factura
+    const tc = Number((invoice as any).tcambio ?? 0)
 
-    // Recargar cuotas actualizadas para calcular status correcto
+    let totalPaid: number
+    let netCollectible: number
+
+    if (isUsdInv && (invoice as any).totalUsd && tc > 0) {
+      // Suma pagos anteriores normalizados a USD
+      const prevPaidUsd = invoice.payments.reduce((s, p) => {
+        const pCur = (p as any).currency ?? 'USD'
+        return s + (pCur === 'PEN' ? Number(p.amount) / tc : Number(p.amount))
+      }, 0)
+      // Pago actual normalizado a USD
+      const thisAmtUsd = payCurrency === 'PEN' ? data.amount / tc : data.amount
+      totalPaid      = Math.round((prevPaidUsd + thisAmtUsd) * 100) / 100
+      netCollectible = Math.round(Number((invoice as any).totalUsd) * 100) / 100
+    } else {
+      totalPaid = invoice.payments.reduce((s, p) => s + Number(p.amount), 0) + data.amount
+      const detraccion = Number((invoice as any).detraccion ?? 0)
+      netCollectible   = Math.round((Number(invoice.total) - detraccion) * 100) / 100
+    }
+
     const updatedCuotas = await prisma.invoiceCuota.findMany({ where: { invoiceId } })
-    const newStatus      = computeStatusFromCuotas(updatedCuotas, totalPaid, netCollectible)
+    const newStatus     = computeStatusFromCuotas(updatedCuotas, totalPaid, netCollectible)
 
     await prisma.invoice.update({ where: { id: invoiceId }, data: { status: newStatus } })
-
-    // Sincronizar WorkOrders vinculadas: BILLED si parcial/pendiente, PAID si completamente pagada
-    if (invoice.workOrders === undefined) {
-      // No vienen en este query, actualizar por invoiceId
-    }
     await prisma.workOrder.updateMany({
       where: { invoiceId },
       data: { status: newStatus === 'PAID' ? 'PAID' : 'BILLED' },
@@ -457,11 +494,15 @@ export const invoicesService = {
         number: inv.number,
         issueDate: inv.issueDate.toISOString(),
         dueDate: inv.dueDate.toISOString(),
+        currency: inv.currency,
         total: Number(inv.total),
+        totalUsd: inv.totalUsd ? Number(inv.totalUsd) : null,
+        tcambio: inv.tcambio ? Number(inv.tcambio) : null,
         totalPaid: Math.round(totalPaid * 100) / 100,
         balance,
         daysOverdue,
         bucket,
+        detraccion: Number(inv.detraccion ?? 0),
       })
     }
 
@@ -476,7 +517,7 @@ export const invoicesService = {
         where: { invoice: { companyId } },
         include: {
           invoice: {
-            select: { series: true, number: true, client: { select: { businessName: true } } },
+            select: { series: true, number: true, currency: true, client: { select: { businessName: true } } },
           },
         },
         orderBy: { paidAt: 'desc' },
@@ -501,20 +542,36 @@ export const invoicesService = {
     }
 
     const monthlyData = await Promise.all(months.map(async (m) => {
-      const [emitido, cobrado] = await Promise.all([
+      const [penInv, usdInv, penPay, usdPay] = await Promise.all([
         prisma.invoice.aggregate({
-          where: { companyId, issueDate: { gte: m.from, lte: m.to } },
+          where: { companyId, currency: 'PEN', issueDate: { gte: m.from, lte: m.to } },
           _sum: { total: true },
         }),
+        prisma.invoice.aggregate({
+          where: { companyId, currency: 'USD', issueDate: { gte: m.from, lte: m.to } },
+          _sum: { totalUsd: true },
+        }),
         prisma.payment.aggregate({
-          where: { invoice: { companyId }, paidAt: { gte: m.from, lte: m.to } },
+          where: { invoice: { companyId, currency: 'PEN' }, paidAt: { gte: m.from, lte: m.to } },
           _sum: { amount: true },
         }),
+        prisma.$queryRaw<[{ total: string | null }]>`
+          SELECT COALESCE(SUM(p.amount), 0) as total
+          FROM payments p
+          JOIN invoices i ON p."invoiceId" = i.id
+          WHERE i."companyId" = ${companyId}
+            AND i.currency::text = 'USD'
+            AND p.currency = 'USD'
+            AND p."paidAt" >= ${m.from}
+            AND p."paidAt" <= ${m.to}
+        `,
       ])
       return {
-        mes: m.label,
-        emitido: Number(emitido._sum.total ?? 0),
-        cobrado: Number(cobrado._sum.amount ?? 0),
+        mes:        m.label,
+        emitido:    Number(penInv._sum.total   ?? 0),
+        emitidoUsd: Number(usdInv._sum.totalUsd ?? 0),
+        cobrado:    Number(penPay._sum.amount  ?? 0),
+        cobradoUsd: Number((usdPay as [{ total: string | null }])[0]?.total ?? 0),
       }
     }))
 

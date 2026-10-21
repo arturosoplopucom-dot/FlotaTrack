@@ -16,7 +16,7 @@ import { api } from '../lib/api'
 
 /* ─── constants ────────────────────────────────────────────────────────── */
 const STATUS_ITEMS = [
-  { id: 'ACTIVE',   primary: 'Activo',   badge: '🟢', secondary: 'Disponible para asignar a OT' },
+  { id: 'ACTIVE',   primary: 'Activo',   badge: '🟢', secondary: 'Disponible para asignar a Liquidación' },
   { id: 'INACTIVE', primary: 'Inactivo', badge: '⚫', secondary: 'No disponible temporalmente' },
 ]
 
