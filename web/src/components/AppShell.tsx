@@ -20,7 +20,7 @@ const SEARCH_CTX: Record<string, { placeholder: string; types: string[] }> = {
   equipment:   { placeholder: 'Buscar equipo…',                  types: ['Equipo'] },
   maintenance: { placeholder: 'Buscar equipo en mantenimiento…', types: ['Equipo'] },
   operators:   { placeholder: 'Buscar operario…',                types: ['Operario'] },
-  workorders:  { placeholder: 'Buscar OT, cliente, equipo…',     types: ['OT'] },
+  workorders:  { placeholder: 'Buscar liquidación, cliente, equipo…', types: ['OT'] },
   clients:     { placeholder: 'Buscar cliente…',                 types: ['Cliente'] },
   cxc:         { placeholder: 'Buscar cliente, factura…',        types: ['Cliente'] },
   aging:       { placeholder: 'Buscar cliente…',                 types: ['Cliente'] },
@@ -48,7 +48,8 @@ const NAV: NavItem[] = [
   { key: 'quotes',      label: 'Cotizaciones',         path: '/quotes',      icon: FileText,        section: 'OPERACIONES' },
   { key: 'operators',   label: 'Operarios',            path: '/operators',   icon: Users,           section: 'OPERACIONES' },
   { key: 'maintenance', label: 'Mantenimiento',        path: '/maintenance', icon: Wrench,          section: 'OPERACIONES' },
-  { key: 'workorders',  label: 'Órdenes de Trabajo',   path: '/workorders',  icon: ClipboardList,   section: 'OPERACIONES' },
+  { key: 'service-reports', label: 'Reportes de Servicio', path: '/service-reports', icon: FileText, section: 'OPERACIONES' },
+  { key: 'workorders',  label: 'Liquidaciones',         path: '/workorders',  icon: ClipboardList,   section: 'OPERACIONES' },
   { key: 'clients',     label: 'Clientes',             path: '/clients',     icon: Building2,       section: 'COMERCIAL' },
   { key: 'cxc',         label: 'Cobranza',             path: '/cxc',         icon: Receipt,         section: 'COMERCIAL' },
   { key: 'aging',       label: 'Antigüedad CxC',       path: '/aging',       icon: Clock,           section: 'COMERCIAL' },
@@ -182,11 +183,12 @@ export default function AppShell({ active, title, children }: AppShellProps) {
 
       {/* ── SIDEBAR ── */}
       <aside
-        className="flex flex-col flex-shrink-0 border-r transition-all duration-200"
+        className="flex flex-col flex-shrink-0 border-r"
         style={{
           width: collapsed ? 56 : 220,
           background: 'var(--clr-sidebar)',
           borderColor: 'var(--clr-border)',
+          transition: 'width 220ms var(--ease-out)',
         }}
       >
         {/* Logo */}
@@ -377,7 +379,7 @@ export default function AppShell({ active, title, children }: AppShellProps) {
           <div ref={searchRef} style={{ position: 'relative', marginLeft: 16 }}>
             <div
               className="flex items-center gap-2 rounded-md px-3 py-1.5"
-              style={{ background: 'var(--clr-surface)', border: `1px solid ${searchOpen ? 'var(--clr-primary)' : 'var(--clr-border)'}`, transition: 'border-color 0.15s' }}
+              style={{ background: 'var(--clr-surface)', border: `1px solid ${searchOpen ? 'var(--clr-primary)' : 'var(--clr-border)'}`, transition: 'border-color 150ms var(--ease-out)' }}
             >
               <Search size={13} style={{ color: 'var(--clr-text-subtle)' }} />
               <input
@@ -395,7 +397,7 @@ export default function AppShell({ active, title, children }: AppShellProps) {
             </div>
 
             {searchOpen && query.length >= 2 && (
-              <div style={{
+              <div className="ft-dropdown-enter" style={{
                 position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, minWidth: 320,
                 background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 10,
                 boxShadow: '0 8px 24px rgba(0,0,0,0.12)', overflow: 'hidden',

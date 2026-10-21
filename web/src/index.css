@@ -1,20 +1,72 @@
 @import "tailwindcss";
 
+/* ─── Motion tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --ease-out:    cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* ─── Button press feedback (global) ────────────────────────────────────────── */
+button {
+  transition: transform 130ms var(--ease-out);
+}
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* ─── Input / select focus transition ───────────────────────────────────────── */
+input, textarea, select {
+  transition: border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out);
+}
+
+/* ─── Tabular numbers in table cells and amounts ────────────────────────────── */
+td, th {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Search / dropdown enter animation ─────────────────────────────────────── */
+.ft-dropdown-enter {
+  animation: ft-dropdown-in 140ms var(--ease-out) both;
+}
+@keyframes ft-dropdown-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+/* ─── Modal backdrop + content enter animation (@starting-style) ─────────────── */
+.ft-modal-backdrop {
+  transition: opacity 180ms var(--ease-out), backdrop-filter 180ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+  }
+}
+.ft-modal-content {
+  transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+}
+
+/* ─── Reduced motion ─────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Print ──────────────────────────────────────────────────────────────────── */
 @media print {
-  /* Ocultar navegación y controles */
   nav, aside, header, .no-print, [data-no-print] { display: none !important; }
-  /* Fondo oscuro → blanco para impresión */
   body, html { background: #fff !important; color: #111 !important; }
-  /* Tabla ocupa todo el ancho */
   main, .print-content { width: 100% !important; max-width: 100% !important; padding: 0 !important; }
   table { width: 100% !important; font-size: 10px !important; border-collapse: collapse !important; }
   th, td { border: 1px solid #ccc !important; padding: 4px 6px !important; color: #111 !important; background: #fff !important; }
   th { background: #f3f4f6 !important; font-weight: 700 !important; }
-  /* Evitar cortes dentro de filas */
   tr { page-break-inside: avoid; }
-  /* Título */
   h1 { font-size: 16px !important; color: #111 !important; margin-bottom: 8px !important; }
   p { color: #555 !important; font-size: 11px !important; }
-  /* Ocultar skeleton y estados vacíos si no hay datos */
   .animate-pulse { display: none !important; }
 }

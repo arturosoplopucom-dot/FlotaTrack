@@ -53,7 +53,23 @@ export function AppearancePanel({ open, onClose }: Props) {
     })
   }, [customColors.primary, customColors.sidebar, customColors.surface, customColors.bg])
 
-  if (!open) return null
+  // ─── Enter / exit animation ────────────────────────────────────────────────
+  const [alive, setAlive]   = useState(open)
+  const [animIn, setAnimIn] = useState(open)
+
+  useEffect(() => {
+    if (open) {
+      setAlive(true)
+      const id = requestAnimationFrame(() => setAnimIn(true))
+      return () => cancelAnimationFrame(id)
+    } else {
+      setAnimIn(false)
+      const t = setTimeout(() => setAlive(false), 200)
+      return () => clearTimeout(t)
+    }
+  }, [open])
+
+  if (!alive) return null
 
   const preset = getPreset()
   const hasAnyCustom = Object.keys(customColors).length > 0
@@ -82,7 +98,12 @@ export function AppearancePanel({ open, onClose }: Props) {
       {/* Backdrop */}
       <div
         onClick={onClose}
-        style={{ position: 'fixed', inset: 0, zIndex: 998, background: 'rgba(0,0,0,0.45)' }}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 998,
+          background: 'rgba(0,0,0,0.45)',
+          opacity: animIn ? 1 : 0,
+          transition: `opacity ${animIn ? 200 : 150}ms var(--ease-out)`,
+        }}
       />
 
       {/* Panel */}
@@ -93,6 +114,8 @@ export function AppearancePanel({ open, onClose }: Props) {
         borderLeft: '1px solid var(--clr-border)',
         display: 'flex', flexDirection: 'column',
         boxShadow: '-12px 0 40px rgba(0,0,0,0.6)',
+        transform: `translateX(${animIn ? 0 : 100}%)`,
+        transition: `transform ${animIn ? 220 : 160}ms var(--ease-out)`,
       }}>
 
         {/* Header */}

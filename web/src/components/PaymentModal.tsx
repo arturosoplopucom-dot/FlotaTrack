@@ -6,8 +6,12 @@ import { X, CheckCircle } from 'lucide-react'
 import { api } from '../lib/api'
 import { useRegisterPayment, type Invoice, type InvoiceCuota } from '../hooks/useInvoices'
 
-const fmt = (n: number | string) =>
-  'S/ ' + Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmtCur = (n: number | string, currency: 'PEN' | 'USD' = 'PEN') => {
+  const sym = currency === 'USD' ? '$ ' : 'S/ '
+  return sym + Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+// backwards-compat alias (PEN default)
+const fmt = (n: number | string) => fmtCur(n, 'PEN')
 
 type InvoiceDetail = Invoice & {
   payments: { id: string; amount: string; method: string; reference?: string; paidAt: string; cuotaId?: string }[]
@@ -57,6 +61,8 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
   const [selectedCuotaId, setSelectedCuotaId] = useState<string | null>(null)
   const [error, setError]     = useState('')
   const [success, setSuccess] = useState('')
+  // Para facturas USD: permite pagar en USD o PEN (convirtiendo con el TC de la factura)
+  const [payCurrency, setPayCurrency] = useState<'USD' | 'PEN'>('USD')
 
   const registerPayment = useRegisterPayment()
 
@@ -68,12 +74,26 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
 
   if (!invoice) return null
 
+  const isUsd    = invoice.currency === 'USD'
+  const tc       = Number(invoice.tcambio ?? 0)   // TC SUNAT de la factura
+  // La moneda efectiva del pago: USD o PEN (solo relevante cuando invoice es USD)
+  const cur      = isUsd ? payCurrency : 'PEN'
+  const fmtI     = (n: number | string) => fmtCur(n, cur)
+
   const hasCuotas     = (detail?.cuotas?.length ?? 0) > 0
   const pendingCuotas = (detail?.cuotas ?? []).filter(c => c.status !== 'PAID')
   const detraccion    = Number(invoice.detraccion ?? 0)
-  const netTotal      = Number(invoice.total) - detraccion
 
-  // Cuando hay cuotas: usar estado de cuotas para evitar que pagos libres distorsionen el saldo
+  // Base de cobro en USD (para facturas USD)
+  const totalUsdNum = isUsd && invoice.totalUsd ? Number(invoice.totalUsd) : 0
+
+  // Monto neto a cobrar en la moneda del pago seleccionada
+  const netTotal = isUsd
+    ? (payCurrency === 'USD'
+        ? totalUsdNum
+        : Math.round(totalUsdNum * tc * 100) / 100)   // convertir USD → PEN con TC SUNAT
+    : Number(invoice.total) - detraccion
+
   const paidCuotasTotal    = (detail?.cuotas ?? []).filter(c => c.status === 'PAID').reduce((s, c) => s + Number(c.amount), 0)
   const pendingCuotasTotal = pendingCuotas.reduce((s, c) => s + Number(c.amount), 0)
   const paymentsTotal      = detail ? detail.payments.reduce((s, p) => s + Number(p.amount), 0) : 0
@@ -81,39 +101,47 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
   const totalPaid = hasCuotas ? paidCuotasTotal    : paymentsTotal
   const balance   = hasCuotas ? pendingCuotasTotal : (detail ? netTotal - paymentsTotal : netTotal)
 
-  // Si hay cuotas y está seleccionada una, prellenar el monto con el de la cuota
   const selectedCuota = detail?.cuotas?.find(c => c.id === selectedCuotaId) ?? null
   const amountPlaceholder = selectedCuota
     ? Number(selectedCuota.amount).toFixed(2)
     : detail ? balance.toFixed(2) : '0.00'
+
+  // Equivalente en la otra moneda (para mostrar como referencia)
+  const enteredAmt  = parseFloat(form.amount || amountPlaceholder) || 0
+  const equivalent  = isUsd && tc > 0
+    ? (payCurrency === 'USD'
+        ? `≈ S/ ${(enteredAmt * tc).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : `≈ $ ${(enteredAmt / tc).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+    : ''
 
   function handlePay() {
     const amount = parseFloat(form.amount || amountPlaceholder)
     if (!amount || amount <= 0) { setError('Ingresa un monto válido'); return }
     if (hasCuotas && !selectedCuotaId) { setError('Selecciona la cuota a pagar'); return }
     if (!hasCuotas && amount > balance + 0.01) {
-      setError(`El monto supera el saldo (${fmt(balance)})`); return
+      setError(`El monto supera el saldo (${fmtI(balance)})`); return
     }
     if (selectedCuota && amount > Number(selectedCuota.amount) + 0.01) {
-      setError(`El monto supera el valor de la cuota (${fmt(selectedCuota.amount)})`); return
+      setError(`El monto supera el valor de la cuota (${fmtI(selectedCuota.amount)})`); return
     }
     setError('')
 
     registerPayment.mutate(
       {
-        id: invoice.id,
+        id:        invoice.id,
         amount,
-        method: form.method,
+        currency:  cur,
+        method:    form.method,
         reference: form.reference || undefined,
-        paidAt: form.paidAt ? `${form.paidAt}T12:00:00` : undefined,
-        cuotaId: selectedCuotaId ?? undefined,
+        paidAt:    form.paidAt ? `${form.paidAt}T12:00:00` : undefined,
+        cuotaId:   selectedCuotaId ?? undefined,
       },
       {
         onSuccess: (res: any) => {
           setSuccess(
             res.status === 'PAID'
               ? '✅ Factura pagada al 100%'
-              : `Pago registrado. Saldo restante: ${fmt(res.balance)}`
+              : `Pago registrado. Saldo restante: ${fmtI(res.balance)}`
           )
           setTimeout(onClose, 1800)
         },
@@ -125,8 +153,8 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(4px)', padding: 16 }}>
-      <div style={{ background: 'var(--clr-sidebar)', border: '1px solid var(--clr-border)', borderRadius: 16, width: '100%', maxWidth: 480, boxShadow: '0 24px 64px rgba(0,0,0,0.15)', maxHeight: '90vh', overflowY: 'auto' }}>
+    <div className="ft-modal-backdrop" style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(4px)', padding: 16 }}>
+      <div className="ft-modal-content" style={{ background: 'var(--clr-sidebar)', border: '1px solid var(--clr-border)', borderRadius: 16, width: '100%', maxWidth: 480, boxShadow: '0 24px 64px rgba(0,0,0,0.15)', maxHeight: '90vh', overflowY: 'auto' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 20px', borderBottom: '1px solid var(--clr-border)', position: 'sticky', top: 0, background: 'var(--clr-sidebar)', zIndex: 1 }}>
@@ -226,29 +254,31 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: 'var(--clr-text-muted)' }}>Total factura (SUNAT)</span>
-              <span style={{ fontWeight: 700, color: 'var(--clr-text)' }}>{fmt(invoice.total)}</span>
+              <span style={{ fontWeight: 700, color: 'var(--clr-text)' }}>
+                {isUsd && invoice.totalUsd ? fmtI(invoice.totalUsd) : fmtI(invoice.total)}
+              </span>
             </div>
             {detraccion > 0 && (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--clr-text-muted)' }}>Detracción retenida</span>
-                  <span style={{ color: 'var(--clr-orange)' }}>− {fmt(detraccion)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ color: 'var(--clr-text-muted)' }}>Monto neto a cobrar</span>
-                  <span style={{ fontWeight: 600, color: 'var(--clr-success)' }}>{fmt(netTotal)}</span>
-                </div>
-              </>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--clr-text-muted)' }}>
+                  Detracción SPOT {isUsd ? '(en soles)' : ''}
+                </span>
+                <span style={{ color: 'var(--clr-orange)' }}>− S/ {Number(detraccion).toLocaleString('es-PE', { minimumFractionDigits: 2 })}</span>
+              </div>
             )}
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ color: 'var(--clr-text-muted)' }}>Monto a cobrar</span>
+              <span style={{ fontWeight: 600, color: 'var(--clr-success)' }}>{fmtI(netTotal)}</span>
+            </div>
             {detail && (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ color: 'var(--clr-text-muted)' }}>Ya cobrado</span>
-                  <span style={{ color: 'var(--clr-success)' }}>{fmt(totalPaid)}</span>
+                  <span style={{ color: 'var(--clr-success)' }}>{fmtI(totalPaid)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--clr-border)', paddingTop: 8, marginTop: 2 }}>
                   <span style={{ fontWeight: 600, color: 'var(--clr-text)' }}>Saldo pendiente</span>
-                  <span style={{ fontWeight: 700, color: '#d97706' }}>{fmt(balance)}</span>
+                  <span style={{ fontWeight: 700, color: '#d97706' }}>{fmtI(balance)}</span>
                 </div>
               </>
             )}
@@ -258,9 +288,39 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
         {/* Form */}
         {(!hasCuotas || selectedCuotaId) && (
           <div style={{ padding: '8px 20px 4px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+            {/* Selector de moneda — solo para facturas USD */}
+            {isUsd && (
+              <div>
+                <label style={labelStyle}>Moneda del pago</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  {(['USD', 'PEN'] as const).map((c) => (
+                    <button
+                      key={c} type="button"
+                      onClick={() => { setPayCurrency(c); setForm(f => ({ ...f, amount: '' })) }}
+                      style={{
+                        padding: '9px 0', fontSize: 13, fontWeight: 700, borderRadius: 8,
+                        cursor: 'pointer', border: '1px solid',
+                        background: payCurrency === c ? (c === 'USD' ? '#1d4ed8' : '#15803d') : 'var(--clr-surface)',
+                        borderColor: payCurrency === c ? (c === 'USD' ? '#3b82f6' : '#16a34a') : 'var(--clr-border)',
+                        color: payCurrency === c ? 'white' : 'var(--clr-text-muted)',
+                      }}
+                    >
+                      {c === 'USD' ? '$ Dólares' : 'S/ Soles'}
+                    </button>
+                  ))}
+                </div>
+                {tc > 0 && (
+                  <p style={{ margin: '5px 0 0', fontSize: 11, color: 'var(--clr-text-subtle)' }}>
+                    TC SUNAT: S/ {tc.toFixed(4)} por US$
+                  </p>
+                )}
+              </div>
+            )}
+
             <div>
               <label style={labelStyle}>
-                {selectedCuota ? `Monto cuota ${selectedCuota.number}` : 'Monto a cobrar'}
+                {selectedCuota ? `Monto cuota ${selectedCuota.number}` : `Monto a cobrar (${cur})`}
               </label>
               <input
                 type="number" step="0.01" min="0.01"
@@ -269,6 +329,9 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
                 onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
                 style={inpStyle}
               />
+              {equivalent && (
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--clr-text-subtle)' }}>{equivalent}</p>
+              )}
               {!hasCuotas && detail && (
                 <button
                   type="button"
