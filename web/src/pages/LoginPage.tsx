@@ -18,7 +18,7 @@ export default function LoginPage() {
   const setAuth = useAuthStore((s) => s.setAuth)
   const [error, setError] = useState('')
   const { register, handleSubmit, formState: { isSubmitting } } = useForm<LoginForm>({
-    defaultValues: { ruc: '', email: '', password: '' }
+    defaultValues: { ruc: '20603350309', email: 'admin@gruasomega.pe', password: 'admin123' }
   })
 
   const onSubmit = async (data: LoginForm) => {
@@ -57,7 +57,7 @@ export default function LoginPage() {
             <input
               id="ruc"
               {...register('ruc', { required: true })}
-              placeholder="20601234567"
+              placeholder="20603350309"
               style={{ ...inpStyle, fontFamily: 'monospace' }}
             />
           </div>
