@@ -15,7 +15,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const BASE  = (process.env.BASE_URL  || 'http://localhost:5175').replace(/\/?$/, '');
-const RUC   = process.env.TEST_RUC   || '20601234567';
+const RUC   = process.env.TEST_RUC   || '20603350309';
 const EMAIL = process.env.TEST_EMAIL || 'admin@gruasomega.pe';
 const PASS  = process.env.TEST_PASS  || 'admin123';
 const SHOTS = path.join(__dirname, 'capturas');
