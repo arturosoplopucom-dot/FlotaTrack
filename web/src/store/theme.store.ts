@@ -30,7 +30,7 @@ export const DEFAULT_PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(245,158,11,0.14)', primaryBorder: 'rgba(245,158,11,0.30)',
     sidebar: '#0F1520', surface: '#151B26', surfaceHover: '#1C2433',
     bg: '#0B0F17', border: '#252E3E',
-    text: '#F1F5F9', textMuted: '#94A3B8', textSubtle: '#64748B', onPrimary: '#0B0F17',
+    text: '#F1F5F9', textMuted: '#94A3B8', textSubtle: '#7A8FA8', onPrimary: '#0B0F17',
     waText: '#25D366',
   },
   {
@@ -40,7 +40,7 @@ export const DEFAULT_PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(37,99,235,0.12)', primaryBorder: 'rgba(37,99,235,0.28)',
     sidebar: '#D6E0F0', surface: '#FAFBFD', surfaceHover: '#E4EBF5',
     bg: '#F1F3F7', border: '#C8D3E8',
-    text: '#0F172A', textMuted: '#475569', textSubtle: '#64748B', onPrimary: '#FFFFFF',
+    text: '#0F172A', textMuted: '#475569', textSubtle: '#556070', onPrimary: '#FFFFFF',
     waText: '#15803D',
   },
 ]
@@ -52,7 +52,7 @@ export const PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(37,99,235,0.14)', primaryBorder: 'rgba(37,99,235,0.35)',
     sidebar: '#161c2a', surface: '#1a2235', surfaceHover: '#253047',
     bg: '#0d1117', border: '#253047',
-    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#475569', onPrimary: '#ffffff',
+    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#7A8FA8', onPrimary: '#ffffff',
     waText: '#4ade80',
   },
   {
@@ -61,7 +61,7 @@ export const PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(5,150,105,0.14)', primaryBorder: 'rgba(5,150,105,0.35)',
     sidebar: '#0b1e18', surface: '#102620', surfaceHover: '#1a3d2e',
     bg: '#060f0c', border: '#1a3d2e',
-    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#475569', onPrimary: '#ffffff',
+    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#7A8FA8', onPrimary: '#ffffff',
     waText: '#4ade80',
   },
   {
@@ -70,7 +70,7 @@ export const PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(124,58,237,0.14)', primaryBorder: 'rgba(124,58,237,0.35)',
     sidebar: '#13102a', surface: '#1a1635', surfaceHover: '#2a2045',
     bg: '#0c0b14', border: '#2a2045',
-    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#475569', onPrimary: '#ffffff',
+    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#7A8FA8', onPrimary: '#ffffff',
     waText: '#4ade80',
   },
   {
@@ -79,7 +79,7 @@ export const PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(234,88,12,0.14)', primaryBorder: 'rgba(234,88,12,0.35)',
     sidebar: '#1c1008', surface: '#271608', surfaceHover: '#3d2510',
     bg: '#100904', border: '#3d2510',
-    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#475569', onPrimary: '#ffffff',
+    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#7A8FA8', onPrimary: '#ffffff',
     waText: '#4ade80',
   },
   {
@@ -88,7 +88,7 @@ export const PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(8,145,178,0.14)', primaryBorder: 'rgba(8,145,178,0.35)',
     sidebar: '#0a1820', surface: '#0f2530', surfaceHover: '#1a3a4a',
     bg: '#060f14', border: '#1a3a4a',
-    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#475569', onPrimary: '#ffffff',
+    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#7A8FA8', onPrimary: '#ffffff',
     waText: '#4ade80',
   },
   {
@@ -97,7 +97,7 @@ export const PRESETS: ThemePreset[] = [
     primaryBg: 'rgba(225,29,72,0.14)', primaryBorder: 'rgba(225,29,72,0.35)',
     sidebar: '#1c0912', surface: '#271020', surfaceHover: '#3d1a2e',
     bg: '#100408', border: '#3d1a2e',
-    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#475569', onPrimary: '#ffffff',
+    text: '#e2e8f0', textMuted: '#94a3b8', textSubtle: '#7A8FA8', onPrimary: '#ffffff',
     waText: '#4ade80',
   },
 ]

@@ -1,0 +1,10 @@
+{
+  "name": "flotatrack-tests",
+  "private": true,
+  "scripts": {
+    "test": "node validar.js"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}

@@ -39,7 +39,7 @@ const inpStyle: React.CSSProperties = {
 }
 
 const labelStyle: React.CSSProperties = {
-  display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6,
+  display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6,
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -160,7 +160,7 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 20px', borderBottom: '1px solid var(--clr-border)', position: 'sticky', top: 0, background: 'var(--clr-sidebar)', zIndex: 1 }}>
           <div>
             <h3 style={{ margin: 0, fontWeight: 700, color: 'var(--clr-text)', fontSize: 15 }}>Registrar Pago</h3>
-            <p style={{ margin: '3px 0 0', fontSize: 11, color: 'var(--clr-text-muted)', fontFamily: 'monospace' }}>
+            <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--clr-text-muted)', fontFamily: 'monospace' }}>
               {invoice.series}-{invoice.number} · {invoice.client.businessName}
             </p>
           </div>
@@ -319,10 +319,11 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
             )}
 
             <div>
-              <label style={labelStyle}>
+              <label htmlFor="payment-amount" style={labelStyle}>
                 {selectedCuota ? `Monto cuota ${selectedCuota.number}` : `Monto a cobrar (${cur})`}
               </label>
               <input
+                id="payment-amount"
                 type="number" step="0.01" min="0.01"
                 placeholder={amountPlaceholder}
                 value={form.amount}
@@ -367,8 +368,9 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
             </div>
 
             <div>
-              <label style={labelStyle}>Referencia / N° operación</label>
+              <label htmlFor="payment-ref" style={labelStyle}>Referencia / N° operación</label>
               <input
+                id="payment-ref"
                 value={form.reference}
                 onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))}
                 placeholder="Opcional"
@@ -377,8 +379,9 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
             </div>
 
             <div>
-              <label style={labelStyle}>Fecha de pago</label>
+              <label htmlFor="payment-date" style={labelStyle}>Fecha de pago</label>
               <input
+                id="payment-date"
                 type="date"
                 value={form.paidAt}
                 onChange={(e) => setForm((f) => ({ ...f, paidAt: e.target.value }))}
@@ -395,12 +398,12 @@ export function PaymentModal({ invoice, onClose }: { invoice: Invoice | null; on
         )}
 
         {error && (
-          <div style={{ margin: '4px 20px', padding: '8px 12px', background: 'var(--clr-danger-bg)', border: '1px solid var(--clr-danger-border)', borderRadius: 8, fontSize: 12, color: 'var(--clr-danger)' }}>
+          <div role="alert" style={{ margin: '4px 20px', padding: '8px 12px', background: 'var(--clr-danger-bg)', border: '1px solid var(--clr-danger-border)', borderRadius: 8, fontSize: 12, color: 'var(--clr-danger)' }}>
             {error}
           </div>
         )}
         {success && (
-          <div style={{ margin: '4px 20px', padding: '8px 12px', background: 'var(--clr-success-bg)', border: '1px solid var(--clr-success-border)', borderRadius: 8, fontSize: 12, color: 'var(--clr-success)' }}>
+          <div role="alert" style={{ margin: '4px 20px', padding: '8px 12px', background: 'var(--clr-success-bg)', border: '1px solid var(--clr-success-border)', borderRadius: 8, fontSize: 12, color: 'var(--clr-success)' }}>
             {success}
           </div>
         )}

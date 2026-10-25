@@ -51,10 +51,11 @@ export default function LoginPage() {
           style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', borderRadius: 14, padding: 32, display: 'flex', flexDirection: 'column', gap: 18 }}
         >
           <div>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
+            <label htmlFor="ruc" style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
               RUC de la empresa
             </label>
             <input
+              id="ruc"
               {...register('ruc', { required: true })}
               placeholder="20601234567"
               style={{ ...inpStyle, fontFamily: 'monospace' }}
@@ -62,10 +63,11 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
+            <label htmlFor="email" style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
               Correo electrónico
             </label>
             <input
+              id="email"
               {...register('email', { required: true })}
               type="email"
               placeholder="admin@empresa.pe"
@@ -74,10 +76,11 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
+            <label htmlFor="password" style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--clr-text-muted)', marginBottom: 6 }}>
               Contraseña
             </label>
             <input
+              id="password"
               {...register('password', { required: true })}
               type="password"
               placeholder="••••••••"
@@ -86,7 +89,7 @@ export default function LoginPage() {
           </div>
 
           {error && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--clr-danger-bg)', border: '1px solid var(--clr-danger-border)', borderRadius: 8, padding: '10px 12px', fontSize: 13, color: 'var(--clr-danger)' }}>
+            <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--clr-danger-bg)', border: '1px solid var(--clr-danger-border)', borderRadius: 8, padding: '10px 12px', fontSize: 13, color: 'var(--clr-danger)' }}>
               <AlertCircle size={14} style={{ flexShrink: 0 }} />
               {error}
             </div>
@@ -101,7 +104,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p style={{ textAlign: 'center', fontSize: 11, color: 'var(--clr-text-subtle)', marginTop: 20 }}>
+        <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--clr-text-muted)', marginTop: 20 }}>
           FlotaTrack · Sistema de gestión de flota
         </p>
       </div>

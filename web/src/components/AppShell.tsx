@@ -214,6 +214,7 @@ export default function AppShell({ active, title, children }: AppShellProps) {
               try { localStorage.setItem('ft-sidebar-collapsed', next ? '1' : '0') } catch {}
               return next
             })}
+            aria-label={collapsed ? 'Expandir menú lateral' : 'Colapsar menú lateral'}
             className="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center transition-colors"
             style={{ color: 'var(--clr-text-subtle)', marginLeft: collapsed ? 'auto' : undefined }}
             onMouseEnter={(e) => { (e.target as HTMLElement).closest('button')!.style.background = 'var(--clr-surface-hover)' }}
@@ -461,6 +462,8 @@ export default function AppShell({ active, title, children }: AppShellProps) {
           <div className="flex items-center gap-2 ml-auto">
             {/* Bell */}
             <button
+              aria-label="Notificaciones"
+              title="Notificaciones"
               className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors relative"
               style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', color: 'var(--clr-text-muted)' }}
             >
@@ -474,6 +477,7 @@ export default function AppShell({ active, title, children }: AppShellProps) {
             {/* Appearance */}
             <button
               onClick={() => setAppearanceOpen(true)}
+              aria-label="Apariencia"
               className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
               title="Apariencia"
               style={{ background: 'var(--clr-surface)', border: '1px solid var(--clr-border)', color: 'var(--clr-text-muted)' }}
@@ -496,7 +500,7 @@ export default function AppShell({ active, title, children }: AppShellProps) {
         </main>
 
         {/* Footer */}
-        <footer style={{ borderTop: '1px solid var(--clr-border)', padding: '10px 24px', backgroundColor: 'var(--clr-sidebar)', fontSize: 11, color: 'var(--clr-text-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <footer style={{ borderTop: '1px solid var(--clr-border)', padding: '10px 24px', backgroundColor: 'var(--clr-sidebar)', fontSize: 12, color: 'var(--clr-text-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <span>FlotaTrack Enterprise v2.4 · Sistema de Gestión de Maquinaria y Cuentas por Cobrar</span>
           <div style={{ display: 'flex', gap: 16 }}>
             <span>SUNAT e-Facturación SPOT 12%</span>
